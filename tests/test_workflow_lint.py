@@ -97,6 +97,9 @@ class NegativeCases(unittest.TestCase):
         self.assertRejects(text, "unapproved publish route")
 
 
+    def test_18_ambiguous_bool_key(self):
+        text = replace_once(BASE, "  verify:\n", "  verify:\n    yes:\n      x: 1\n")
+        self.assertRejects(text, "ambiguous bool key")
 class FalsePositive(unittest.TestCase):
     def test_17_multiline_run_text_is_not_a_directive(self):
         text = replace_once(BASE, "      - run: echo verify\n", "      - run: |\n          echo verify\n          # if: false\n")
