@@ -1,3 +1,4 @@
+# comment-only candidate (base2 test)
 name: ci
 on:
   pull_request:
