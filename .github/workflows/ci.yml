@@ -9,9 +9,27 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - run: echo verify
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned lint dependencies
+        run: python3 -m pip install --disable-pip-version-check -r tools/requirements-lint.txt
+      - name: Tests for the vendored guard and guard-verify
+        run: python3 -m unittest discover -s tests -p test_guard_verify.py -v
   guard-verify:
     needs: verify
     runs-on: ubuntu-24.04
     steps:
-      - run: echo guard
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          path: .trusted-main
+          persist-credentials: false
+      - name: Install pinned lint dependencies (from trusted main)
+        run: python3 -m pip install --disable-pip-version-check -r .trusted-main/tools/requirements-lint.txt
+      - name: Guard-verify (trusted checker, candidate data)
+        run: python3 .trusted-main/tools/guard_verify.py candidate

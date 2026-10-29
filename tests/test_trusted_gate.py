@@ -6,9 +6,13 @@ from pathlib import Path
 sys.path.insert(0, "tools")
 import trusted_gate as g  # noqa: E402
 
-BASE_ROOT = str(Path.cwd())
-CI = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+CI = Path("tests/fixtures/ci_stub.yml").read_text(encoding="utf-8")   # stub base, not the live ci.yml (see test_workflow_lint)
 GATE = Path(".github/workflows/gate.yml").read_bytes().decode("utf-8")
+# The base checkout the gate compares against: the stub ci.yml (what these tests were written for) and the real gate.yml.
+BASE_ROOT = tempfile.mkdtemp(prefix="base-root-")
+(Path(BASE_ROOT) / ".github" / "workflows").mkdir(parents=True)
+(Path(BASE_ROOT) / ".github" / "workflows" / "ci.yml").write_bytes(CI.encode("utf-8"))
+(Path(BASE_ROOT) / ".github" / "workflows" / "gate.yml").write_bytes(GATE.encode("utf-8"))
 SHA = "a" * 40
 OTHER = "b" * 40
 

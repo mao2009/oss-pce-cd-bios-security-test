@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path.cwd()
-BASH = r"C:\Program Files\Git\bin\bash.exe"
+BASH = os.environ.get("GATE_BASH") or (r"C:\Program Files\Git\bin\bash.exe" if os.name == "nt" else "/bin/bash")
 SHA1 = "a" * 40
 SHA2 = "b" * 40
 REPO = "mao2009/oss-pce-cd-bios-security-test"
