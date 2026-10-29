@@ -32,7 +32,8 @@ def step_run(step_id=None, name=None):
 
 
 AUTHORIZE_RUN = step_run(step_id="authorize")
-REAUTH_RUN = step_run(name="Re-authorize and publish trusted-gate check (App)")
+PRE_TOKEN_RUN = step_run(name="Verify guard-verify proof before any App token")
+REAUTH_RUN = step_run(name="Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)")
 REAUTH_ENV_NAMES = ["READ_TOKEN", "APP_TOKEN", "REPO", "PR_NUMBER", "HEAD_SHA", "EVENT_NAME", "EVAL_RESULT", "VERDICT"]
 
 
@@ -47,6 +48,36 @@ def pr_json(number=7, base_ref="main", repo=REPO, state="open", head=SHA1):
         "base": {"ref": base_ref, "repo": {"full_name": repo}},
         "head": {"sha": head},
     }
+
+
+def guard_fixture(directory, conclusion, head):
+    """Write the guard-verify data that fetch_guard_inputs.sh would fetch (PR 7, head SHA1)."""
+    from datetime import datetime, timezone
+
+    directory.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    check = {
+        "id": 11, "name": "guard-verify", "head_sha": head, "status": "completed",
+        "conclusion": conclusion, "completed_at": now, "app": {"id": 15368},
+        "html_url": "https://github.com/%s/actions/runs/1/job/2" % REPO,
+    }
+    run = {
+        "id": 1, "head_sha": head, "event": "pull_request", "path": ".github/workflows/ci.yml",
+        "status": "completed", "conclusion": "success", "pull_requests": [{"number": 7}],
+    }
+    job = {
+        "id": 2, "name": "guard-verify", "head_sha": head, "status": "completed",
+        "conclusion": "success", "steps": [],
+    }
+    (directory / "cr.json").write_text(json.dumps({"check_runs": [check], "total_count": 1, "complete": True}), encoding="utf-8")
+    (directory / "runs.json").write_text(json.dumps({"workflow_runs": [run], "total_count": 1, "complete": True}), encoding="utf-8")
+    (directory / "jobs-1.json").write_text(json.dumps({"jobs": [job], "total_count": 1, "complete": True}), encoding="utf-8")
+    # The candidate's ci.yml at the head: here the same as the base (LF-normalized), so its guard digest matches.
+    import base64
+
+    ci_text = Path(".github/workflows/ci.yml").read_bytes().decode("utf-8").replace("\r\n", "\n")
+    content = base64.b64encode(ci_text.encode("utf-8")).decode("ascii")
+    (directory / "ci-contents.json").write_text(json.dumps({"content": content}), encoding="utf-8")
 
 
 class Harness:
@@ -66,12 +97,17 @@ class Harness:
         self.post_log = self.dir / "posted.log"
         self.counter = self.dir / "counter"
         self.github_output = self.dir / "github_output"
+        self.summary = self.dir / "step_summary.md"
 
     def script(self, body, python=None):
         # Route the step's own commands to stubs and absolute paths; keep the body otherwise.
         py = python or self.py
+        # The real fetch calls gh; the guard data is written as fixtures instead (see scenario).
+        body = body.replace("python3 tools/fetch_guard_inputs.py", "true")
         body = body.replace("python3 ", '"' + py + '" ')
         body = body.replace("gh api", '"' + posix(BASH) + '" "' + posix(self.gh_stub) + '" api')
+        # The real fetch calls gh; the guard data is written as fixtures instead (see scenario).
+        body = body.replace("bash tools/fetch_guard_inputs.sh", "true")
         path = self.dir / ("step-%d.sh" % len(list(self.dir.glob("step-*.sh"))))
         path.write_text("set -eo pipefail\n" + body, encoding="utf-8", newline="\n")
         return path
@@ -94,6 +130,7 @@ class Harness:
             "VERDICT": "pass",
             "READ_TOKEN": "x",
             "APP_TOKEN": "app-token-placeholder",
+            "GITHUB_STEP_SUMMARY": posix(self.summary),
         })
         env.update(extra)
         return env
@@ -104,10 +141,13 @@ class Harness:
             cwd=str(ROOT), env=env, capture_output=True, text=True,
         )
 
-    def scenario(self, pr1, pr2=None, python=None, event_name="pull_request_target", eval_sha=SHA1, post_fail=False):
+    def scenario(self, pr1, pr2=None, python=None, event_name="pull_request_target", eval_sha=SHA1, post_fail=False,
+                 guard_pre="success", guard_post="success"):
         self.fixture1.write_text(json.dumps(pr1) if pr1 is not None else "", encoding="utf-8")
         self.fixture2.write_text(json.dumps(pr2) if pr2 is not None else "", encoding="utf-8")
-        for f in (self.post_log, self.counter, self.github_output):
+        guard_fixture(self.dir / "guard-pre", guard_pre, eval_sha)
+        guard_fixture(self.dir / "guard-post", guard_post, eval_sha)
+        for f in (self.post_log, self.counter, self.github_output, self.summary):
             if f.exists():
                 f.unlink()
         env = self.env(EVENT_NAME=event_name, HEAD_SHA=eval_sha, POST_FAIL="1" if post_fail else "0")
@@ -115,8 +155,11 @@ class Harness:
         allow = "allow=true" in (self.github_output.read_text() if self.github_output.exists() else "")
         reauth_rc = None
         if allow:
-            reauth = self.run_bash(self.script(REAUTH_RUN, python), env)
-            reauth_rc = reauth.returncode
+            # As in the job: a failing step stops the later steps (App token, re-authorize, POST).
+            pre = self.run_bash(self.script(PRE_TOKEN_RUN, python), env)
+            if pre.returncode == 0:
+                reauth = self.run_bash(self.script(REAUTH_RUN, python), env)
+                reauth_rc = reauth.returncode
         posted = self.post_log.read_text(encoding="utf-8").splitlines() if self.post_log.exists() else []
         return {"auth_rc": auth.returncode, "allow": allow, "reauth_rc": reauth_rc, "posted": posted}
 
@@ -213,6 +256,32 @@ class PublishShell(unittest.TestCase):
         self.assertFalse(r["allow"])
         self.assertEqual(r["posted"], [])
 
+    def test_guard_failure_at_repost_posts_nothing(self):
+        # guard-verify failed on this head: the re-verify before POST must stop the publish.
+        r = self.h.scenario(pr_json(), pr_json(), guard_post="failure")
+        self.assertTrue(r["allow"])
+        self.assertNotEqual(r["reauth_rc"], 0)
+        self.assertEqual(r["posted"], [])
+
+    def test_guard_failure_before_token_posts_nothing(self):
+        # Pre-token guard check fails: the job stops before the App token and re-authorize.
+        r = self.h.scenario(pr_json(), pr_json(), guard_pre="failure")
+        self.assertTrue(r["allow"])
+        self.assertIsNone(r["reauth_rc"])
+        self.assertEqual(r["posted"], [])
+
+    def test_denial_step_fails_job_and_writes_reason(self):
+        deny = step_run(name="Report publish denial (job fails; no App token; no check posted)")
+        r = self.h.scenario(pr_json(base_ref="gate-test/base"))
+        self.assertFalse(r["allow"])
+        env = self.h.env(REASON="DENY: base ref is not main")
+        result = self.h.run_bash(self.h.script(deny), env)
+        self.assertNotEqual(result.returncode, 0)
+        text = self.h.summary.read_text(encoding="utf-8")
+        self.assertIn("publish denied", text)
+        self.assertIn("DENY: base ref is not main", text)
+        self.assertEqual(r["posted"], [])
+
     def test_post_failure_is_not_reported_as_success(self):
         # The POST itself fails (gh api exits 1). The step must fail; no success is recorded.
         r = self.h.scenario(pr_json(), pr_json(), post_fail=True)
@@ -223,7 +292,7 @@ class PublishShell(unittest.TestCase):
     def test_reauthorize_step_has_no_error_suppression(self):
         # Any shell operator on the re-authorize or post command could swallow a failure.
         self.assertNotIn("||", REAUTH_RUN)
-        post_step = [s for s in STEPS if s.get("name") == "Re-authorize and publish trusted-gate check (App)"][0]
+        post_step = [s for s in STEPS if s.get("name") == "Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)"][0]
         self.assertNotIn("continue-on-error", post_step)
 
 

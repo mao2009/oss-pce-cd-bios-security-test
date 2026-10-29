@@ -15,7 +15,7 @@ import trusted_gate as g  # noqa: E402
 OLD = "1" * 40
 NEW = "2" * 40
 REPO = Path.cwd()
-PUBLISH_STEP = "Re-authorize and publish trusted-gate check (App)"
+PUBLISH_STEP = "Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)"
 
 
 def publish_run_lines():

@@ -7,8 +7,12 @@ permissions:
 jobs:
   evaluate:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      checks: read
+      actions: read
     outputs:
-      verdict: ${{ steps.eval.outputs.verdict }}
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -26,6 +30,49 @@ jobs:
         run: |
           CHECKED_OUT=$(git -C candidate rev-parse HEAD)
           if python3 tools/trusted_gate.py candidate . "$HEAD_SHA" "$CHECKED_OUT"; then
+            echo "candidate=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "candidate=fail" >> "$GITHUB_OUTPUT"
+          fi
+      - id: guard
+        if: steps.eval.outputs.candidate == 'pass'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Poll for the canonical guard-verify result on this head, bounded by a deadline.
+          # Pending at the deadline is a failure (fail closed).
+          DEADLINE=$(( $(date +%s) + 2700 ))
+          while :; do
+            python3 tools/fetch_guard_inputs.py "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-eval"
+            set +e
+            OUT=$(python3 tools/guard_proof.py "$RUNNER_TEMP/guard-eval" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .)
+            RC=$?
+            set -e
+            echo "$OUT"
+            if [ "$RC" -eq 0 ]; then
+              echo "guard=pass" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$RC" -ne 3 ]; then
+              echo "guard=fail" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "FAIL: guard-verify still pending at the deadline"
+              echo "guard=fail" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 60
+          done
+      - id: verdict
+        env:
+          CANDIDATE: ${{ steps.eval.outputs.candidate }}
+          GUARD: ${{ steps.guard.outputs.guard }}
+        run: |
+          if [ "$CANDIDATE" = "pass" ] && [ "$GUARD" = "pass" ]; then
             echo "verdict=pass" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=fail" >> "$GITHUB_OUTPUT"
@@ -37,11 +84,15 @@ jobs:
     environment: trusted-gate
     permissions:
       pull-requests: read
+      checks: read
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Authorize publish (base, repo, state, head) before any App token
+      - name: Install pinned lint dependencies (from base)
+        run: python3 -m pip install --disable-pip-version-check -r tools/requirements-lint.txt
+      - name: Authorize publish (base, repo, state, head, PR number) before any App token
         id: authorize
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,21 +102,46 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-1.json"
-          if python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-1.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME" "$PR_NUMBER"; then
+          if OUT=$(python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-1.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME" "$PR_NUMBER"); then
             echo "allow=true" >> "$GITHUB_OUTPUT"
           else
             echo "allow=false" >> "$GITHUB_OUTPUT"
+            echo "reason=$OUT" >> "$GITHUB_OUTPUT"
           fi
+      - name: Report publish denial (job fails; no App token; no check posted)
+        if: always() && steps.authorize.outputs.allow != 'true'
+        env:
+          REASON: ${{ steps.authorize.outputs.reason }}
+        run: |
+          {
+            echo "### trusted-gate: publish denied"
+            echo ""
+            echo "${REASON:-authorization did not complete}"
+            echo ""
+            echo "No App token was requested and no trusted-gate check was posted for this commit."
+            echo "This job result is not the trusted-gate check; the check is absent, so the PR stays blocked."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+      - name: Verify guard-verify proof before any App token
+        if: success() && steps.authorize.outputs.allow == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 tools/fetch_guard_inputs.py "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-pre"
+          python3 tools/guard_proof.py "$RUNNER_TEMP/guard-pre" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .
       - id: app
-        if: steps.authorize.outputs.allow == 'true'
+        if: success() && steps.authorize.outputs.allow == 'true'
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
         with:
           app-id: 5519582
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: mao2009
           repositories: oss-pce-cd-bios-security-test
-      - name: Re-authorize and publish trusted-gate check (App)
-        if: steps.authorize.outputs.allow == 'true'
+      - name: Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)
+        if: success() && steps.authorize.outputs.allow == 'true'
         env:
           READ_TOKEN: ${{ github.token }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
@@ -78,6 +154,8 @@ jobs:
         run: |
           GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-2.json"
           python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME" "$PR_NUMBER"
+          GH_TOKEN="$READ_TOKEN" python3 tools/fetch_guard_inputs.py "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-post"
+          python3 tools/guard_proof.py "$RUNNER_TEMP/guard-post" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .
           CURRENT_HEAD=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['head']['sha'])" "$RUNNER_TEMP/pr-2.json")
           CONCLUSION=$(python3 tools/trusted_gate.py publish "$EVAL_RESULT" "$VERDICT" "$HEAD_SHA" "$CURRENT_HEAD")
           GH_TOKEN="$APP_TOKEN" gh api --method POST "repos/$REPO/check-runs" \
