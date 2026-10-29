@@ -1,0 +1,55 @@
+{
+  "_status": "DRAFT. Not applied. No Ruleset, App, or Environment was changed. integration_id null means the new App does not exist yet and must be created under a separate owner approval.",
+  "ruleset": "gate-verify (ID 26089402, repo mao2009/oss-pce-cd-bios-security-test)",
+  "current": {
+    "enforcement": "active",
+    "bypass_actors": [],
+    "required_status_checks_rule": {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [
+          {"context": "trusted-gate", "integration_id": 5519582}
+        ]
+      }
+    }
+  },
+  "target": {
+    "enforcement": "active",
+    "bypass_actors": [],
+    "required_status_checks_rule": {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [
+          {"context": "trusted-gate", "integration_id": 5519582},
+          {"context": "gate-update", "integration_id": null}
+        ]
+      }
+    }
+  },
+  "migration_steps": [
+    "1. Create the update-check App (separate owner approval). Record its App ID as integration_id.",
+    "2. Prove the gate-update check end to end on a Draft PR in the verification repo (positive and negative cases) BEFORE it is required. Only the trusted-gate check is required during this step.",
+    "3. Apply the target ruleset with ONE PUT (owner approval, full JSON diff reviewed). This adds gate-update; trusted-gate stays. Confirm with GET effective rules and a test PR.",
+    "4. Do not remove any existing required check in the same change. Removing trusted-gate is a separate later step, not part of this migration."
+  ],
+  "why_not_replace_now": "Adding gate-update as required before it has published any success blocks every PR (no check ever appears). Replacing trusted-gate with it before it is proven removes the only working gate.",
+  "rollback": {
+    "trigger": "Any PR is unmergeable because gate-update never reports, or a test PR shows gate-update succeeding for a bad change.",
+    "steps": [
+      "1. PUT the current JSON back (the required_status_checks_rule above, integration_id 5519582 only). Single PUT, owner approval.",
+      "2. Verify with GET that the effective rules equal the 'current' block and bypass_actors is [].",
+      "3. Confirm a test PR shows trusted-gate as required and gate-update absent."
+    ],
+    "backup": "Compare with the existing backup in scratchpad/ruleset-backup-20261029 (verify gate-verify 26089402) before any PUT."
+  },
+  "verification_after_apply": [
+    "GET effective rules for the default branch: required checks list equals target exactly.",
+    "Draft PR with a passing candidate reaches mergeable only after both checks succeed.",
+    "Draft PR with a failing candidate stays blocked by both checks.",
+    "Old successes from a previous head do not satisfy the required check on a new head."
+  ]
+}
