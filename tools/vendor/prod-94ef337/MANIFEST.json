@@ -1,0 +1,21 @@
+{
+  "source_repo": "mao2009/oss-pce-cd-bios",
+  "source_commit": "94ef337a1c976c1d798ec43c4727c79403612f04",
+  "source_note": "read-only copy via the contents API at source_commit; blob SHA-1 equals git's object id for the bytes stored here",
+  "files": [
+    {"name": "artifact_guard.py", "source_path": "tools/artifact_guard.py", "blob_sha1": "f0cd07f3b44bbedd273142153ef4f644227e69ee", "sha256": "946a8589b62e9e96817756369050e9a3d7f9488550e2456d557a648c5fb206d2", "size": 152044, "executed": true},
+    {"name": "check.py", "source_path": "tools/check.py", "blob_sha1": "77a852b1e7afbb1085926cba4ad2dfc6069087d2", "sha256": "459176db2dd5faa5eb9756b383f66987470f391ba242c5a669d41ea71c1d416a", "size": 4842, "executed": false},
+    {"name": "environment.py", "source_path": "tools/environment.py", "blob_sha1": "07d23fed06e733b0ab39ed5ac8ce6c99f6245490", "sha256": "4384df747f18fa3a9c73ffe10b96077002b59bf1e2edace5506942a5a7b83692", "size": 3736, "executed": false},
+    {"name": "provenance_guard.py", "source_path": "tools/provenance_guard.py", "blob_sha1": "72ef5a3a8c3b94951cb1808846c49153ab8e6c7c", "sha256": "0d5ff9fb0dfe25917f8e4c492787e827e42d867908e6e36d55678a6344048466", "size": 12240, "executed": false}
+  ],
+  "dependencies": {
+    "python": ">=3.9 (stdlib only, plus PyYAML)",
+    "pyyaml": "6.0.3 (tools/requirements-lint.txt; imported lazily by artifact_guard)"
+  },
+  "not_verified": [
+    "provenance_guard.py: not executed. It imports check.py -> environment.py, which read tools/dependencies.json from the production tree and need the production toolchain and PR diff context.",
+    "ROM and build-dependent checks (make setup/build/test/check, cc65, geargrafx): not run in this repository. Production CI result is not reproduced here.",
+    "artifact_guard default CLI on the production workflows: not run. This repository has its own workflows; only the candidate ci.yml and the candidate tree (minus gate.yml) are checked.",
+    "gate.yml: excluded from the artifact_guard scan. trusted_gate.py rejects any PR that changes gate.yml (raw SHA-256), so this file is covered by that rule, not by artifact_guard."
+  ]
+}

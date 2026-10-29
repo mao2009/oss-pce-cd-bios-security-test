@@ -6,7 +6,9 @@ from pathlib import Path
 sys.path.insert(0, "tools")
 import workflow_lint as w  # noqa: E402
 
-BASE = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+# The stub ci.yml that these fixtures were written against (blob b31d51d8 on verification main). The live ci.yml now runs
+# the real guard, so the rejection tests keep a fixed copy instead of tracking whatever ci.yml currently says.
+BASE = Path("tests/fixtures/ci_stub.yml").read_text(encoding="utf-8")
 GATE = Path(".github/workflows/gate.yml").read_bytes().decode("utf-8")
 SHA = "11d5960a326750d5838078e36cf38b85af677262"
 NIGHTLY = "name: nightly\non:\n  schedule:\n    - cron: '0 3 * * *'\n  workflow_dispatch:\njobs:\n  nightly:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo nightly\n"
