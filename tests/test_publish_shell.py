@@ -56,7 +56,7 @@ class Harness:
         self.gh_stub = self.dir / "gh_stub.sh"
         self.gh_stub.write_text(
             "#!/bin/bash\n"
-            'for a in "$@"; do if [ "$a" = "POST" ]; then echo "$*" >> "$POST_LOG"; exit 0; fi; done\n'
+            'for a in "$@"; do if [ "$a" = "POST" ]; then echo "$*" >> "$POST_LOG"; if [ "$POST_FAIL" = "1" ]; then exit 1; fi; exit 0; fi; done\n'
             'n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$COUNTER"\n'
             'if [ "$n" -ge 2 ] && [ -s "$FIXTURE2" ]; then cat "$FIXTURE2"; else cat "$FIXTURE1"; fi\n',
             encoding="utf-8", newline="\n",
@@ -104,13 +104,13 @@ class Harness:
             cwd=str(ROOT), env=env, capture_output=True, text=True,
         )
 
-    def scenario(self, pr1, pr2=None, python=None, event_name="pull_request_target", eval_sha=SHA1):
+    def scenario(self, pr1, pr2=None, python=None, event_name="pull_request_target", eval_sha=SHA1, post_fail=False):
         self.fixture1.write_text(json.dumps(pr1) if pr1 is not None else "", encoding="utf-8")
         self.fixture2.write_text(json.dumps(pr2) if pr2 is not None else "", encoding="utf-8")
         for f in (self.post_log, self.counter, self.github_output):
             if f.exists():
                 f.unlink()
-        env = self.env(EVENT_NAME=event_name, HEAD_SHA=eval_sha)
+        env = self.env(EVENT_NAME=event_name, HEAD_SHA=eval_sha, POST_FAIL="1" if post_fail else "0")
         auth = self.run_bash(self.script(AUTHORIZE_RUN, python), env)
         allow = "allow=true" in (self.github_output.read_text() if self.github_output.exists() else "")
         reauth_rc = None
@@ -213,9 +213,16 @@ class PublishShell(unittest.TestCase):
         self.assertFalse(r["allow"])
         self.assertEqual(r["posted"], [])
 
+    def test_post_failure_is_not_reported_as_success(self):
+        # The POST itself fails (gh api exits 1). The step must fail; no success is recorded.
+        r = self.h.scenario(pr_json(), pr_json(), post_fail=True)
+        self.assertTrue(r["allow"])
+        self.assertNotEqual(r["reauth_rc"], 0)
+        self.assertEqual(len(r["posted"]), 1)
+
     def test_reauthorize_step_has_no_error_suppression(self):
-        self.assertNotIn("|| true", REAUTH_RUN)
-        self.assertNotIn("|| :", REAUTH_RUN)
+        # Any shell operator on the re-authorize or post command could swallow a failure.
+        self.assertNotIn("||", REAUTH_RUN)
         post_step = [s for s in STEPS if s.get("name") == "Re-authorize and publish trusted-gate check (App)"][0]
         self.assertNotIn("continue-on-error", post_step)
 
