@@ -41,24 +41,44 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Authorize publish (base, repo, state, head) before any App token
+        id: authorize
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-1.json"
+          if python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-1.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME"; then
+            echo "allow=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "allow=false" >> "$GITHUB_OUTPUT"
+          fi
       - id: app
+        if: steps.authorize.outputs.allow == 'true'
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
         with:
           app-id: 5519582
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: mao2009
           repositories: oss-pce-cd-bios-security-test
-      - name: Read current PR head and publish trusted-gate check (App)
+      - name: Re-authorize and publish trusted-gate check (App)
+        if: steps.authorize.outputs.allow == 'true'
         env:
           READ_TOKEN: ${{ github.token }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
           EVAL_RESULT: ${{ needs.evaluate.result }}
           VERDICT: ${{ needs.evaluate.outputs.verdict }}
         run: |
-          CURRENT_HEAD=$(GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha || echo "")
+          GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-2.json"
+          python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME"
+          CURRENT_HEAD=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['head']['sha'])" "$RUNNER_TEMP/pr-2.json")
           CONCLUSION=$(python3 tools/trusted_gate.py publish "$EVAL_RESULT" "$VERDICT" "$HEAD_SHA" "$CURRENT_HEAD")
           GH_TOKEN="$APP_TOKEN" gh api --method POST "repos/$REPO/check-runs" \
             -f name=trusted-gate -f head_sha="$HEAD_SHA" -f status=completed -f conclusion="$CONCLUSION"
