@@ -38,6 +38,9 @@ jobs:
     permissions:
       pull-requests: read
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
         with:
@@ -45,27 +48,17 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: mao2009
           repositories: oss-pce-cd-bios-security-test
-      - name: Confirm PR head is still current
-        id: head
+      - name: Read current PR head and publish trusted-gate check (App)
         env:
-          GH_TOKEN: ${{ github.token }}
+          READ_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          echo "current=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)" >> "$GITHUB_OUTPUT"
-      - name: Publish trusted-gate check (App)
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CURRENT_HEAD: ${{ steps.head.outputs.current }}
           EVAL_RESULT: ${{ needs.evaluate.result }}
           VERDICT: ${{ needs.evaluate.outputs.verdict }}
         run: |
-          if [ "$EVAL_RESULT" = "success" ] && [ "$VERDICT" = "pass" ] && [ "$CURRENT_HEAD" = "$HEAD_SHA" ]; then
-            CONCLUSION=success
-          else
-            CONCLUSION=failure
-          fi
-          gh api --method POST "repos/$REPO/check-runs" \
+          CURRENT_HEAD=$(GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha || echo "")
+          CONCLUSION=$(python3 tools/trusted_gate.py publish "$EVAL_RESULT" "$VERDICT" "$HEAD_SHA" "$CURRENT_HEAD")
+          GH_TOKEN="$APP_TOKEN" gh api --method POST "repos/$REPO/check-runs" \
             -f name=trusted-gate -f head_sha="$HEAD_SHA" -f status=completed -f conclusion="$CONCLUSION"
