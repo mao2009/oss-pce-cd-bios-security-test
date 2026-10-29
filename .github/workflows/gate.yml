@@ -10,10 +10,10 @@ jobs:
     outputs:
       verdict: ${{ steps.eval.outputs.verdict }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: candidate
@@ -22,7 +22,8 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if python3 tools/trusted_gate.py candidate "$HEAD_SHA"; then
+          CHECKED_OUT=$(git -C candidate rev-parse HEAD)
+          if python3 tools/trusted_gate.py candidate "$HEAD_SHA" "$CHECKED_OUT"; then
             echo "verdict=pass" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=fail" >> "$GITHUB_OUTPUT"
@@ -32,26 +33,37 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     environment: trusted-gate
-    permissions: {}
+    permissions:
+      pull-requests: read
     steps:
       - id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
         with:
           app-id: 5519582
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: mao2009
           repositories: oss-pce-cd-bios-security-test
+      - name: Confirm PR head is still current
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "current=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)" >> "$GITHUB_OUTPUT"
       - name: Publish trusted-gate check (App)
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_HEAD: ${{ steps.head.outputs.current }}
           EVAL_RESULT: ${{ needs.evaluate.result }}
           VERDICT: ${{ needs.evaluate.outputs.verdict }}
         run: |
-          if [ "$EVAL_RESULT" = "success" ] && [ "$VERDICT" = "pass" ]; then
+          if [ "$EVAL_RESULT" = "success" ] && [ "$VERDICT" = "pass" ] && [ "$CURRENT_HEAD" = "$HEAD_SHA" ]; then
             CONCLUSION=success
           else
             CONCLUSION=failure
           fi
-          gh api --method POST repos/${{ github.repository }}/check-runs \
+          gh api --method POST "repos/$REPO/check-runs" \
             -f name=trusted-gate -f head_sha="$HEAD_SHA" -f status=completed -f conclusion="$CONCLUSION"

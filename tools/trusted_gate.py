@@ -6,6 +6,7 @@ from pathlib import Path
 GUARD_JOB = "  guard-verify:"
 NEXT_JOB = re.compile(r"^  [A-Za-z0-9_-]+:$")
 EXPECTED_GUARD_SHA256 = "0270421589ef19fe5707531e8ae20e49dbf12b5ec1457e7b6118470911080bdc"
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def guard_block(text):
@@ -21,9 +22,9 @@ def guard_block(text):
     return "\n".join(block)
 
 
-def verdict(candidate_root, head_sha, event_sha):
-    if head_sha != event_sha:
-        return "FAIL: head sha mismatch"
+def verdict(candidate_root, event_sha, checked_out_sha):
+    if not SHA_RE.match(event_sha) or event_sha != checked_out_sha:
+        return "FAIL: checked-out HEAD does not match PR head"
     path = Path(candidate_root) / ".github" / "workflows" / "ci.yml"
     if not path.is_file():
         return "FAIL: ci.yml missing"
@@ -39,10 +40,8 @@ def verdict(candidate_root, head_sha, event_sha):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3:
-        head_sha = sys.argv[2]
-        event_sha = head_sha
-        result = verdict(sys.argv[1], head_sha, event_sha)
-        print(result)
-        sys.exit(0 if result == "PASS" else 1)
-    sys.exit(2)
+    if len(sys.argv) != 4:
+        sys.exit(2)
+    result = verdict(sys.argv[1], sys.argv[2], sys.argv[3])
+    print(result)
+    sys.exit(0 if result == "PASS" else 1)
