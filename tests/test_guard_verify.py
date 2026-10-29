@@ -59,6 +59,44 @@ class VendorTests(unittest.TestCase):
             shutil.copytree(gv.VENDOR, vendor)
             gv.verify_vendor(vendor)
 
+    def test_vendored_files_have_no_carriage_return(self):
+        # -text in .gitattributes keeps LF on every OS, so the hashed bytes are the blob bytes everywhere.
+        for entry in gv.json.loads((gv.VENDOR / "MANIFEST.json").read_text(encoding="utf-8"))["files"]:
+            self.assertNotIn(b"\r", (gv.VENDOR / entry["name"]).read_bytes(), entry["name"])
+
+    def mutated_vendor(self, scratch, name, mutate):
+        vendor = Path(scratch) / "vendor"
+        shutil.copytree(gv.VENDOR, vendor)
+        target = vendor / name
+        target.write_bytes(mutate(target.read_bytes()))
+        return vendor
+
+    def test_one_byte_change_is_rejected(self):
+        with tempfile.TemporaryDirectory(dir=TMP) as scratch:
+            vendor = self.mutated_vendor(scratch, "check.py", lambda b: b[:-1] + bytes([b[-1] ^ 0x01]))
+            with self.assertRaisesRegex(ValueError, "differs from MANIFEST.json: check.py"):
+                gv.verify_vendor(vendor)
+
+    def test_line_ending_conversion_is_rejected(self):
+        # A CRLF checkout of a vendored file must fail closed, not be normalized.
+        with tempfile.TemporaryDirectory(dir=TMP) as scratch:
+            vendor = self.mutated_vendor(scratch, "environment.py", lambda b: b.replace(b"\n", b"\r\n"))
+            with self.assertRaisesRegex(ValueError, "differs from MANIFEST.json: environment.py"):
+                gv.verify_vendor(vendor)
+
+    def test_manifest_hash_edit_is_rejected(self):
+        # Editing only the manifest's recorded hash must fail, because the file no longer matches it.
+        with tempfile.TemporaryDirectory(dir=TMP) as scratch:
+            vendor = Path(scratch) / "vendor"
+            shutil.copytree(gv.VENDOR, vendor)
+            manifest = vendor / "MANIFEST.json"
+            text = manifest.read_text(encoding="utf-8")
+            needle = "946a8589b62e9e96817756369050e9a3d7f9488550e2456d557a648c5fb206d2"
+            self.assertEqual(text.count(needle), 1, "mutation needle must match exactly once")
+            manifest.write_text(text.replace(needle, "0" * 64), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "differs from MANIFEST.json: artifact_guard.py"):
+                gv.verify_vendor(vendor)
+
 
 class CandidateTests(unittest.TestCase):
     def check(self, files):
