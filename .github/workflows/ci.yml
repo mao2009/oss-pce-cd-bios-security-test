@@ -9,9 +9,4 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - run: echo verify
-  guard-verify:
-    needs: verify
-    runs-on: ubuntu-24.04
-    steps:
-      - run: echo guard
+      - run: echo verify-control
