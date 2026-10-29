@@ -16,10 +16,6 @@ from yaml.events import AliasEvent
 BOOL_TAG = "tag:yaml.org,2002:bool"
 MERGE_TAG = "tag:yaml.org,2002:merge"
 GUARD_JOB = "guard-verify"
-# sha256 of canonical JSON of the guard-verify job on main (fixture ci.yml).
-GUARD_JOB_SHA256 = "443ac6dad429d88c77121a5e4cb9bb65979cc2224b31d034aec047ee89288c91"
-# Publish routes allowed on main. The fixture has none.
-PUBLISH_BASELINE = frozenset()
 PUBLISH_USES = re.compile(
     r"^(actions/(upload-artifact|upload-pages-artifact|deploy-pages|attest)|softprops/|ncipollo/)",
     re.IGNORECASE,
@@ -85,13 +81,20 @@ def _is_constant_false(value):
     return value is False or (isinstance(value, str) and value.strip().strip("${} ").lower() == "false")
 
 
-def check_workflow(name, doc):
+def trigger_names(doc):
     triggers = doc.get("on")
-    if not triggers:
+    if isinstance(triggers, dict):
+        return set(triggers)
+    if isinstance(triggers, list):
+        return set(triggers)
+    if isinstance(triggers, str):
+        return {triggers}
+    return set()
+
+
+def check_workflow(name, doc):
+    if not trigger_names(doc):
         raise LintError(name + ": trigger (on) missing or disabled")
-    names = set(triggers) if isinstance(triggers, dict) else set(triggers if isinstance(triggers, list) else [triggers])
-    if not names & {"pull_request", "pull_request_target"}:
-        raise LintError(name + ": no pull_request trigger")
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict):
         raise LintError(name + ": jobs missing")
@@ -117,25 +120,40 @@ def check_workflow(name, doc):
     return publish
 
 
-def check_tree(root, guard_digest=GUARD_JOB_SHA256, publish_baseline=PUBLISH_BASELINE):
-    """Return the set of publish routes; raise LintError on any violation."""
+def check_tree(root, baseline):
+    """Compare the candidate tree against a trusted baseline.
+
+    `baseline` must come from the trusted base branch, never from the
+    candidate tree. Returns the set of publish routes found.
+    """
     root = Path(root)
     wf_dir = root / ".github" / "workflows"
-    if not (wf_dir / "ci.yml").is_file():
-        raise LintError("ci.yml missing")
     if (root / ".github" / "actions").exists():
         raise LintError("local composite actions are not allowed")
+    expected_files = baseline["files"]
+    present = {p.name for p in wf_dir.glob("*.y*ml")}
+    removed = set(expected_files) - present
+    if removed:
+        raise LintError("workflow removed or renamed: " + ", ".join(sorted(removed)))
+    added = present - set(expected_files)
+    if added:
+        raise LintError("workflow added or renamed: " + ", ".join(sorted(added)))
     publish = set()
-    for path in sorted(wf_dir.glob("*.y*ml")):
-        doc = parse_workflow(path.read_text(encoding="utf-8"))
-        publish |= check_workflow(path.name, doc)
-    unexpected = publish - publish_baseline
+    for name in sorted(present):
+        doc = parse_workflow((wf_dir / name).read_text(encoding="utf-8"))
+        if trigger_names(doc) != set(expected_files[name]["triggers"]):
+            raise LintError(name + ": triggers changed")
+        publish |= check_workflow(name, doc)
+        if name == "ci.yml":
+            guard = doc["jobs"].get(GUARD_JOB)
+            if guard is None:
+                raise LintError("guard-verify job missing")
+            if canonical_digest(guard) != baseline["guard_digest"]:
+                raise LintError("guard-verify job changed")
+    unexpected = publish - set(baseline["publish"])
     if unexpected:
         raise LintError("unapproved publish route: " + ", ".join(sorted(unexpected)))
-    ci = parse_workflow((wf_dir / "ci.yml").read_text(encoding="utf-8"))
-    guard = ci["jobs"].get(GUARD_JOB)
-    if guard is None:
-        raise LintError("guard-verify job missing")
-    if canonical_digest(guard) != guard_digest:
-        raise LintError("guard-verify job changed")
+    missing = set(baseline["publish"]) - publish
+    if missing:
+        raise LintError("baseline publish route removed: " + ", ".join(sorted(missing)))
     return publish
