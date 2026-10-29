@@ -214,10 +214,10 @@ class Negative(unittest.TestCase):
 
     # M5: gate.yml protected as a whole
     def test_40_candidate_gate_adds_pull_request(self):
-        self.assertRejects("triggers changed", {"gate.yml": replace_once(GATE, "  pull_request_target:\n", "  pull_request:\n  pull_request_target:\n")})
+        self.assertRejects("triggers changed", {"gate.yml": replace_once(GATE.replace("\r\n", "\n"), "  pull_request_target:\n", "  pull_request:\n  pull_request_target:\n")})
 
     def test_41_candidate_gate_run_body_changed(self):
-        self.assertRejects("gate.yml changed", {"gate.yml": replace_once(GATE, "if python3 tools/trusted_gate.py candidate", "if true || python3 tools/trusted_gate.py candidate")})
+        self.assertRejects("gate.yml changed", {"gate.yml": replace_once(GATE.replace("\r\n", "\n"), "if python3 tools/trusted_gate.py candidate", "if true || python3 tools/trusted_gate.py candidate")})
 
     def test_55_gate_deleted(self):
         self.assertRejects("removed or renamed", {".github/workflows/gate.yml": None})
