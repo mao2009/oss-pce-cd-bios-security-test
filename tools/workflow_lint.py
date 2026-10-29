@@ -43,7 +43,7 @@ JOB_FLAG_KEYS = (
     "name", "if", "permissions", "secrets", "uses", "continue-on-error", "environment",
     "env", "defaults", "runs-on", "container", "services", "strategy", "outputs",
 )
-STEP_FLAG_KEYS = ("name", "id", "if", "continue-on-error", "shell", "env", "working-directory", "with", "uses")
+STEP_FLAG_KEYS = ("name", "id", "if", "continue-on-error", "shell", "env", "working-directory", "with", "uses", "run")
 
 
 class LintError(Exception):

