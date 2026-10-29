@@ -152,7 +152,7 @@ class GateConfig(unittest.TestCase):
         self.assertEqual(self.step(step_id="app")["if"], "steps.authorize.outputs.allow == 'true'")
 
     def test_post_requires_authorization_and_reauthorizes(self):
-        post = self.step(name="Re-authorize and publish trusted-gate check (App)")
+        post = self.step(name="Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)")
         self.assertEqual(post["if"], "steps.authorize.outputs.allow == 'true'")
         run = post["run"]
         self.assertIn('trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json"', run)
@@ -167,7 +167,7 @@ class GateConfig(unittest.TestCase):
             if s.get("id") == "app":
                 continue
             if "APP_TOKEN" in str(s.get("env", {})) or "steps.app.outputs" in str(s.get("env", {})):
-                self.assertEqual(s.get("name"), "Re-authorize and publish trusted-gate check (App)")
+                self.assertEqual(s.get("name"), "Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)")
 
 
 if __name__ == "__main__":
