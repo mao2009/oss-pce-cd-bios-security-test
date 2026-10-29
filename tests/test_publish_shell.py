@@ -69,9 +69,9 @@ def guard_fixture(directory, conclusion, head):
         "id": 2, "name": "guard-verify", "head_sha": head, "status": "completed",
         "conclusion": "success", "steps": [],
     }
-    (directory / "cr.json").write_text(json.dumps({"check_runs": [check]}), encoding="utf-8")
-    (directory / "runs.json").write_text(json.dumps({"workflow_runs": [run]}), encoding="utf-8")
-    (directory / "jobs-1.json").write_text(json.dumps({"jobs": [job]}), encoding="utf-8")
+    (directory / "cr.json").write_text(json.dumps({"check_runs": [check], "complete": True}), encoding="utf-8")
+    (directory / "runs.json").write_text(json.dumps({"workflow_runs": [run], "complete": True}), encoding="utf-8")
+    (directory / "jobs-1.json").write_text(json.dumps({"jobs": [job], "complete": True}), encoding="utf-8")
     # The candidate's ci.yml at the head: here the same as the base (LF-normalized), so its guard digest matches.
     import base64
 
@@ -102,6 +102,8 @@ class Harness:
     def script(self, body, python=None):
         # Route the step's own commands to stubs and absolute paths; keep the body otherwise.
         py = python or self.py
+        # The real fetch calls gh; the guard data is written as fixtures instead (see scenario).
+        body = body.replace("python3 tools/fetch_guard_inputs.py", "true")
         body = body.replace("python3 ", '"' + py + '" ')
         body = body.replace("gh api", '"' + posix(BASH) + '" "' + posix(self.gh_stub) + '" api')
         # The real fetch calls gh; the guard data is written as fixtures instead (see scenario).

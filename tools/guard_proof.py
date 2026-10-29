@@ -31,8 +31,19 @@ MAX_AGE = timedelta(hours=24)
 PAGE_LIMIT = 100
 
 
-def _ts(value):
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+FUTURE_SKEW = timedelta(minutes=5)
+
+
+def _ts(value, now):
+    """Parse an aware ISO-8601 timestamp. Naive, malformed, or future values raise ValueError."""
+    if not isinstance(value, str):
+        raise ValueError("timestamp is not a string")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp has no timezone")
+    if parsed - now > FUTURE_SKEW:
+        raise ValueError("timestamp is in the future")
+    return parsed
 
 
 def _load(path):
@@ -59,10 +70,11 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
     except (OSError, ValueError) as exc:
         return "FAIL: check or run data unreadable (" + type(exc).__name__ + ")", None
 
+    # The fetch step writes "complete": true only after every page was read. Anything else is unknown.
+    if cr.get("complete") is not True or runs.get("complete") is not True:
+        return "FAIL: listing completeness not established", None
     check_runs = cr.get("check_runs", [])
     workflow_runs = runs.get("workflow_runs", [])
-    if len(check_runs) >= PAGE_LIMIT or len(workflow_runs) >= PAGE_LIMIT:
-        return "FAIL: listing may be truncated at the page limit", None
 
     try:
         candidate_digest = candidate_guard_digest(d)
@@ -88,7 +100,11 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
     completed = check.get("completed_at")
     if not completed:
         return "FAIL: guard-verify has no completion time", None
-    if now - _ts(completed) > MAX_AGE:
+    try:
+        completed_at = _ts(completed, now)
+    except ValueError as exc:
+        return "FAIL: guard-verify completion time is invalid: " + str(exc), None
+    if now - completed_at > MAX_AGE:
         return "FAIL: guard-verify result is expired", None
 
     # The check's html_url names the run and job: https://github.com/<repo>/actions/runs/<run>/job/<job>
@@ -117,11 +133,13 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
         return "FAIL: run is not associated with this PR", None
 
     try:
-        jobs = _load(d / ("jobs-%d.json" % run_id)).get("jobs", [])
+        jobs_doc = _load(d / ("jobs-%d.json" % run_id))
+        jobs = jobs_doc.get("jobs", [])
+        jobs_file_complete = jobs_doc.get("complete")
     except (OSError, ValueError):
         return "FAIL: job data for the run is unreadable", None
-    if len(jobs) >= PAGE_LIMIT:
-        return "FAIL: job listing may be truncated at the page limit", None
+    if jobs_file_complete is not True:
+        return "FAIL: job listing completeness not established", None
     # Display names are not unique in a workflow. Two jobs named guard-verify (for example a
     # candidate job with `name: guard-verify`) make the identity ambiguous, so it fails closed.
     named = [j for j in jobs if j.get("name") == GUARD_JOB]

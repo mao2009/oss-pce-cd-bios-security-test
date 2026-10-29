@@ -78,13 +78,13 @@ def job(**over):
     return j
 
 
-def write_case(checks=None, runs=None, jobs=None, ci_text=None, ci_present=True, required_runs=None):
+def write_case(checks=None, runs=None, jobs=None, ci_text=None, ci_present=True, required_runs=None, complete=True):
     d = Path(tempfile.mkdtemp())
     runs_list = runs if runs is not None else [run()]
-    (d / "cr.json").write_text(json.dumps({"check_runs": checks if checks is not None else [check()]}), encoding="utf-8")
-    (d / "runs.json").write_text(json.dumps({"workflow_runs": runs_list}), encoding="utf-8")
+    (d / "cr.json").write_text(json.dumps({"check_runs": checks if checks is not None else [check()], "complete": complete}), encoding="utf-8")
+    (d / "runs.json").write_text(json.dumps({"workflow_runs": runs_list, "complete": complete}), encoding="utf-8")
     for r in runs_list:
-        (d / ("jobs-%d.json" % r["id"])).write_text(json.dumps({"jobs": jobs if jobs is not None else [job()]}), encoding="utf-8")
+        (d / ("jobs-%d.json" % r["id"])).write_text(json.dumps({"jobs": jobs if jobs is not None else [job()], "complete": complete}), encoding="utf-8")
     if ci_present:
         text = ci_text if ci_text is not None else BASE_CI
         content = base64.b64encode(text.encode("utf-8")).decode("ascii")
@@ -216,7 +216,7 @@ class Negatives(unittest.TestCase):
 
     def test_30_listing_at_page_limit_fails_closed(self):
         many = [check(id=CHECK + i, conclusion="failure", completed_at=RECENT) for i in range(100)]
-        self.assertFails(write_case(checks=many), "may be truncated")
+        self.assertFails(write_case(checks=many, complete=False), "completeness not established")
 
 
     def test_31_two_jobs_named_guard_verify_are_ambiguous(self):
@@ -226,7 +226,7 @@ class Negatives(unittest.TestCase):
 
     def test_32_runs_listing_at_page_limit_fails_closed(self):
         many = [run(id=RUN + i) for i in range(100)]
-        self.assertFails(write_case(runs=many, checks=[check()]), "may be truncated")
+        self.assertFails(write_case(runs=many, checks=[check()], complete=False), "completeness not established")
 
     def test_33_duplicate_key_in_candidate_ci_reports_the_reason(self):
         dup = "on: push\n" + BASE_CI

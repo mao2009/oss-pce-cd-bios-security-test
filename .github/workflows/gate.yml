@@ -46,7 +46,7 @@ jobs:
           # Pending at the deadline is a failure (fail closed).
           DEADLINE=$(( $(date +%s) + 2700 ))
           while :; do
-            bash tools/fetch_guard_inputs.sh "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-eval"
+            python3 tools/fetch_guard_inputs.py "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-eval"
             set +e
             OUT=$(python3 tools/guard_proof.py "$RUNNER_TEMP/guard-eval" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .)
             RC=$?
@@ -130,7 +130,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          bash tools/fetch_guard_inputs.sh "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-pre"
+          python3 tools/fetch_guard_inputs.py "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-pre"
           python3 tools/guard_proof.py "$RUNNER_TEMP/guard-pre" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .
       - id: app
         if: success() && steps.authorize.outputs.allow == 'true'
@@ -154,7 +154,7 @@ jobs:
         run: |
           GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-2.json"
           python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME" "$PR_NUMBER"
-          GH_TOKEN="$READ_TOKEN" bash tools/fetch_guard_inputs.sh "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-post"
+          GH_TOKEN="$READ_TOKEN" python3 tools/fetch_guard_inputs.py "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-post"
           python3 tools/guard_proof.py "$RUNNER_TEMP/guard-post" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .
           CURRENT_HEAD=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['head']['sha'])" "$RUNNER_TEMP/pr-2.json")
           CONCLUSION=$(python3 tools/trusted_gate.py publish "$EVAL_RESULT" "$VERDICT" "$HEAD_SHA" "$CURRENT_HEAD")
