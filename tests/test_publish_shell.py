@@ -69,9 +69,9 @@ def guard_fixture(directory, conclusion, head):
         "id": 2, "name": "guard-verify", "head_sha": head, "status": "completed",
         "conclusion": "success", "steps": [],
     }
-    (directory / "cr.json").write_text(json.dumps({"check_runs": [check], "complete": True}), encoding="utf-8")
-    (directory / "runs.json").write_text(json.dumps({"workflow_runs": [run], "complete": True}), encoding="utf-8")
-    (directory / "jobs-1.json").write_text(json.dumps({"jobs": [job], "complete": True}), encoding="utf-8")
+    (directory / "cr.json").write_text(json.dumps({"check_runs": [check], "total_count": 1, "complete": True}), encoding="utf-8")
+    (directory / "runs.json").write_text(json.dumps({"workflow_runs": [run], "total_count": 1, "complete": True}), encoding="utf-8")
+    (directory / "jobs-1.json").write_text(json.dumps({"jobs": [job], "total_count": 1, "complete": True}), encoding="utf-8")
     # The candidate's ci.yml at the head: here the same as the base (LF-normalized), so its guard digest matches.
     import base64
 

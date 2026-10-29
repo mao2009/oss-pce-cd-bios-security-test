@@ -31,7 +31,13 @@ MAX_AGE = timedelta(hours=24)
 PAGE_LIMIT = 100
 
 
-FUTURE_SKEW = timedelta(minutes=5)
+FUTURE_SKEW = timedelta(minutes=3)
+
+
+def _listing_ok(doc, key):
+    """The listing must carry total_count and contain exactly that many items."""
+    total = doc.get("total_count")
+    return isinstance(total, int) and not isinstance(total, bool) and total == len(doc.get(key, []))
 
 
 def _ts(value, now):
@@ -73,6 +79,8 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
     # The fetch step writes "complete": true only after every page was read. Anything else is unknown.
     if cr.get("complete") is not True or runs.get("complete") is not True:
         return "FAIL: listing completeness not established", None
+    if not _listing_ok(cr, "check_runs") or not _listing_ok(runs, "workflow_runs"):
+        return "FAIL: listing count does not match total_count", None
     check_runs = cr.get("check_runs", [])
     workflow_runs = runs.get("workflow_runs", [])
 
@@ -90,7 +98,13 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
     trusted = [c for c in checks if (c.get("app") or {}).get("id") == GITHUB_ACTIONS_APP_ID]
     if not trusted:
         return "FAIL: guard-verify exists only from an untrusted app", None
-    check = max(trusted, key=lambda c: c.get("completed_at") or "")
+    # A newer rerun that is still queued or running means an older success must not be used.
+    if any(c.get("status") != "completed" for c in trusted):
+        return "PENDING: a guard-verify run for this app is still queued or running", None
+    try:
+        check = max(trusted, key=lambda c: _ts(c.get("completed_at"), now))
+    except ValueError as exc:
+        return "FAIL: guard-verify completion time is invalid: " + str(exc), None
     if check.get("head_sha") != head_sha:
         return "FAIL: guard-verify check is for a different head", None
     if check.get("status") != "completed":
@@ -138,8 +152,8 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
         jobs_file_complete = jobs_doc.get("complete")
     except (OSError, ValueError):
         return "FAIL: job data for the run is unreadable", None
-    if jobs_file_complete is not True:
-        return "FAIL: job listing completeness not established", None
+    if jobs_file_complete is not True or not _listing_ok(jobs_doc, "jobs"):
+        return "FAIL: job listing completeness or count not established", None
     # Display names are not unique in a workflow. Two jobs named guard-verify (for example a
     # candidate job with `name: guard-verify`) make the identity ambiguous, so it fails closed.
     named = [j for j in jobs if j.get("name") == GUARD_JOB]

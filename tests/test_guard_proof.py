@@ -81,10 +81,10 @@ def job(**over):
 def write_case(checks=None, runs=None, jobs=None, ci_text=None, ci_present=True, required_runs=None, complete=True):
     d = Path(tempfile.mkdtemp())
     runs_list = runs if runs is not None else [run()]
-    (d / "cr.json").write_text(json.dumps({"check_runs": checks if checks is not None else [check()], "complete": complete}), encoding="utf-8")
-    (d / "runs.json").write_text(json.dumps({"workflow_runs": runs_list, "complete": complete}), encoding="utf-8")
+    (d / "cr.json").write_text(json.dumps({"check_runs": checks if checks is not None else [check()], "total_count": len(checks if checks is not None else [check()]), "complete": complete}), encoding="utf-8")
+    (d / "runs.json").write_text(json.dumps({"workflow_runs": runs_list, "total_count": len(runs_list), "complete": complete}), encoding="utf-8")
     for r in runs_list:
-        (d / ("jobs-%d.json" % r["id"])).write_text(json.dumps({"jobs": jobs if jobs is not None else [job()], "complete": complete}), encoding="utf-8")
+        (d / ("jobs-%d.json" % r["id"])).write_text(json.dumps({"jobs": jobs if jobs is not None else [job()], "total_count": len(jobs if jobs is not None else [job()]), "complete": complete}), encoding="utf-8")
     if ci_present:
         text = ci_text if ci_text is not None else BASE_CI
         content = base64.b64encode(text.encode("utf-8")).decode("ascii")
@@ -137,7 +137,7 @@ class Negatives(unittest.TestCase):
         self.assertFails(write_case(checks=[check(completed_at=OLD)]), "expired")
 
     def test_08_guard_no_completion_time(self):
-        self.assertFails(write_case(checks=[check(completed_at=None)]), "no completion time")
+        self.assertFails(write_case(checks=[check(completed_at=None)]), "completion time is invalid")
 
     def test_09_same_name_from_other_app_is_ignored(self):
         self.assertFails(write_case(checks=[check(app={"id": 999999})]), "untrusted app")

@@ -1,10 +1,13 @@
 """Fetch the read-only inputs guard_proof.py needs. Usage: fetch_guard_inputs.py REPO HEAD_SHA OUT_DIR
 
 Requires GH_TOKEN with checks:read, actions:read, contents:read.
-- Every listing is read page by page. A file is written with "complete": true only
-  after the last page; a listing that cannot be finished makes the whole fetch fail.
-- Each gh call is retried a fixed number of times with fixed backoff, then fails closed.
-- Run ids come from the same runs listing that is written to disk (no second listing).
+- Each listing is read page by page. Every page must report the same total_count,
+  the number of items read must equal total_count, and item ids must be unique.
+  Any violation (changed listing, duplicates, page cap) fails the whole fetch.
+- A file is written with "complete": true only after the last page is verified.
+- Each gh call has a timeout and a fixed retry count with fixed backoff, then fails closed.
+- Files from an earlier fetch in the same directory are removed first, so a failed
+  fetch can never leave a previous run's data for guard_proof to accept.
 - Nothing fetched is executed. Stderr and tokens are never printed.
 """
 import json
@@ -17,6 +20,8 @@ PAGE = 100
 MAX_PAGES = 50
 ATTEMPTS = 3
 BACKOFF_SECONDS = (2, 4)
+GH_TIMEOUT_SECONDS = 60
+KNOWN_FILES = ("cr.json", "runs.json", "ci-contents.json")
 
 
 class FetchError(Exception):
@@ -24,8 +29,13 @@ class FetchError(Exception):
 
 
 def gh_run(args):
-    """Run gh and return stdout. The real runner never echoes stderr (it may carry request details)."""
-    proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, check=False)
+    """Run gh and return stdout. Stderr is captured and never printed."""
+    try:
+        proc = subprocess.run(
+            ["gh", "api", *args], capture_output=True, text=True, check=False, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        raise FetchError("gh timed out after %ds" % GH_TIMEOUT_SECONDS)
     if proc.returncode != 0:
         raise FetchError("gh exited %d" % proc.returncode)
     return proc.stdout
@@ -45,23 +55,44 @@ def gh_json(runner, path, sleep=time.sleep):
 
 
 def paged(runner, path, key, sleep=time.sleep):
-    """Read every page of a listing. Returns {key: [...], "complete": True} or raises."""
+    """Read and verify every page of a listing. Returns {key, total_count, complete} or raises."""
     items = []
+    total = None
     for page in range(1, MAX_PAGES + 1):
         sep = "&" if "?" in path else "?"
         data = gh_json(runner, "%s%sper_page=%d&page=%d" % (path, sep, PAGE, page), sleep=sleep)
-        if key not in data:
-            raise FetchError("listing has no %r key" % key)
+        if key not in data or not isinstance(data.get("total_count"), int):
+            raise FetchError("listing has no %r key or no total_count" % key)
+        if total is None:
+            total = data["total_count"]
+        elif data["total_count"] != total:
+            raise FetchError("listing changed while paging (total_count differs)")
         chunk = data[key]
         items.extend(chunk)
-        if len(chunk) < PAGE:
-            return {key: items, "complete": True}
-    raise FetchError("listing exceeds %d pages; refusing to guess" % MAX_PAGES)
+        if len(items) >= total or len(chunk) < PAGE:
+            break
+    else:
+        raise FetchError("listing exceeds %d pages; refusing to guess" % MAX_PAGES)
+    if len(items) != total:
+        raise FetchError("listing count %d does not match total_count %d" % (len(items), total))
+    ids = [item.get("id") for item in items]
+    if len(set(ids)) != len(ids):
+        raise FetchError("duplicate items while paging (listing changed)")
+    return {key: items, "total_count": total, "complete": True}
+
+
+def clear_stale(out):
+    """Remove only files this script writes, so an old fetch cannot leak into a new verdict."""
+    for name in KNOWN_FILES:
+        (out / name).unlink(missing_ok=True)
+    for stale in out.glob("jobs-*.json"):
+        stale.unlink()
 
 
 def fetch(runner, repo, head, out, sleep=time.sleep):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    clear_stale(out)
     cr = paged(runner, "repos/%s/commits/%s/check-runs" % (repo, head), "check_runs", sleep=sleep)
     runs = paged(runner, "repos/%s/actions/runs?head_sha=%s&event=pull_request" % (repo, head), "workflow_runs", sleep=sleep)
     (out / "cr.json").write_text(json.dumps(cr), encoding="utf-8")
