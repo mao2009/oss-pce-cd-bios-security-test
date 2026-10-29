@@ -1,3 +1,4 @@
+# live post-merge: non-main base (expect NO App check)
 name: ci
 on:
   pull_request:
