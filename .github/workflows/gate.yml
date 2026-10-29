@@ -109,7 +109,7 @@ jobs:
             echo "reason=$OUT" >> "$GITHUB_OUTPUT"
           fi
       - name: Report publish denial (job fails; no App token; no check posted)
-        if: steps.authorize.outputs.allow != 'true'
+        if: always() && steps.authorize.outputs.allow != 'true'
         env:
           REASON: ${{ steps.authorize.outputs.reason }}
         run: |
@@ -123,7 +123,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
       - name: Verify guard-verify proof before any App token
-        if: steps.authorize.outputs.allow == 'true'
+        if: success() && steps.authorize.outputs.allow == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -133,7 +133,7 @@ jobs:
           bash tools/fetch_guard_inputs.sh "$REPO" "$HEAD_SHA" "$RUNNER_TEMP/guard-pre"
           python3 tools/guard_proof.py "$RUNNER_TEMP/guard-pre" "$REPO" "$PR_NUMBER" "$HEAD_SHA" .
       - id: app
-        if: steps.authorize.outputs.allow == 'true'
+        if: success() && steps.authorize.outputs.allow == 'true'
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
         with:
           app-id: 5519582
@@ -141,7 +141,7 @@ jobs:
           owner: mao2009
           repositories: oss-pce-cd-bios-security-test
       - name: Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)
-        if: steps.authorize.outputs.allow == 'true'
+        if: success() && steps.authorize.outputs.allow == 'true'
         env:
           READ_TOKEN: ${{ github.token }}
           APP_TOKEN: ${{ steps.app.outputs.token }}

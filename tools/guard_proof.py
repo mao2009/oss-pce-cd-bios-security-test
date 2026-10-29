@@ -4,20 +4,31 @@ Inputs are JSON files fetched by the gate (read-only GITHUB_TOKEN):
   cr.json              check-runs for the head commit
   runs.json            workflow runs for the head commit with event=pull_request
   jobs-<run_id>.json   jobs of each candidate run
+  ci-contents.json     the candidate's .github/workflows/ci.yml at the head (base64, from the contents API)
 
 The verdict is one of PASS, PENDING, or FAIL: <reason>. Anything not positively
 proven is FAIL (or PENDING while the job may still be running, which the caller
 must bound with a deadline and turn into FAIL). Nothing in these files is
 executed; they are read as data.
+
+The proof does not rely on the evaluate verdict. It re-checks the candidate's
+own guard job against the trusted base digest, so a forged guard-verify job in
+the candidate's ci.yml is rejected here as well.
 """
+import base64
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_lint as w  # noqa: E402  (PyYAML; a missing module must fail the proof)
 
 GUARD_JOB = "guard-verify"
 CI_PATH = ".github/workflows/ci.yml"
 GITHUB_ACTIONS_APP_ID = 15368
 MAX_AGE = timedelta(hours=24)
+PAGE_LIMIT = 100
 
 
 def _ts(value):
@@ -28,7 +39,18 @@ def _load(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, now):
+def candidate_guard_digest(directory):
+    """Digest of the candidate's guard job, parsed strictly from the contents API data."""
+    raw = _load(Path(directory) / "ci-contents.json")
+    text = base64.b64decode(raw["content"]).decode("utf-8")
+    doc = w.parse_workflow(text)
+    job = doc.get("jobs", {}).get(GUARD_JOB)
+    if job is None:
+        return None
+    return w.canonical_digest(job)
+
+
+def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base_guard_digest, now):
     """Return (verdict, proof). proof holds run/job/check ids for the audit log."""
     d = Path(directory)
     try:
@@ -37,7 +59,19 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, now)
     except (OSError, ValueError) as exc:
         return "FAIL: check or run data unreadable (" + type(exc).__name__ + ")", None
 
-    checks = [c for c in cr.get("check_runs", []) if c.get("name") == GUARD_JOB]
+    check_runs = cr.get("check_runs", [])
+    workflow_runs = runs.get("workflow_runs", [])
+    if len(check_runs) >= PAGE_LIMIT or len(workflow_runs) >= PAGE_LIMIT:
+        return "FAIL: listing may be truncated at the page limit", None
+
+    try:
+        candidate_digest = candidate_guard_digest(d)
+    except (OSError, ValueError, KeyError, w.LintError) as exc:
+        return "FAIL: candidate ci.yml unreadable or invalid (" + type(exc).__name__ + ")", None
+    if candidate_digest is None or candidate_digest != base_guard_digest:
+        return "FAIL: candidate guard-verify job differs from the trusted base", None
+
+    checks = [c for c in check_runs if c.get("name") == GUARD_JOB]
     if not checks:
         return "PENDING: guard-verify check not present yet", None
     # Only checks issued by GitHub Actions count. A same-named check from another app is ignored.
@@ -68,7 +102,7 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, now)
     except (ValueError, IndexError):
         return "FAIL: guard-verify run reference is malformed", None
 
-    run = next((r for r in runs.get("workflow_runs", []) if r.get("id") == run_id), None)
+    run = next((r for r in workflow_runs if r.get("id") == run_id), None)
     if run is None:
         return "FAIL: guard-verify run is not among the head's pull_request runs", None
     if run.get("head_sha") != head_sha:
@@ -86,6 +120,8 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, now)
         jobs = _load(d / ("jobs-%d.json" % run_id)).get("jobs", [])
     except (OSError, ValueError):
         return "FAIL: job data for the run is unreadable", None
+    if len(jobs) >= PAGE_LIMIT:
+        return "FAIL: job listing may be truncated at the page limit", None
     job = next((j for j in jobs if j.get("id") == job_id and j.get("name") == GUARD_JOB), None)
     if job is None:
         return "FAIL: guard-verify job not found in the run", None
@@ -108,18 +144,18 @@ def required_steps_from_base(base_guard_job):
 
 
 if __name__ == "__main__":
-    import sys
+    from datetime import datetime as _dt
 
     # Usage: guard_proof.py DIR REPO PR_NUMBER HEAD_SHA BASE_ROOT
-    # Required steps come from the trusted base checkout, never from the candidate.
+    # Required steps and the guard digest come from the trusted base checkout only.
     if len(sys.argv) != 6:
         sys.exit(2)
     directory, repo, pr_number, head_sha, base_root = sys.argv[1:6]
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import workflow_lint as w  # noqa: E402
-
     base_ci = w.parse_workflow((Path(base_root) / ".github" / "workflows" / "ci.yml").read_bytes().decode("utf-8"))
-    required = required_steps_from_base(base_ci["jobs"][GUARD_JOB])
-    verdict, proof = verify_guard(directory, repo, int(pr_number), head_sha, required, datetime.now(timezone.utc))
+    base_job = base_ci["jobs"][GUARD_JOB]
+    verdict, proof = verify_guard(
+        directory, repo, int(pr_number), head_sha, required_steps_from_base(base_job),
+        w.canonical_digest(base_job), _dt.now(timezone.utc),
+    )
     print(verdict if proof is None else "PASS " + json.dumps(proof, sort_keys=True))
     sys.exit(0 if verdict.startswith("PASS") else (3 if verdict.startswith("PENDING") else 1))

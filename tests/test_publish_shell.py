@@ -72,6 +72,12 @@ def guard_fixture(directory, conclusion, head):
     (directory / "cr.json").write_text(json.dumps({"check_runs": [check]}), encoding="utf-8")
     (directory / "runs.json").write_text(json.dumps({"workflow_runs": [run]}), encoding="utf-8")
     (directory / "jobs-1.json").write_text(json.dumps({"jobs": [job]}), encoding="utf-8")
+    # The candidate's ci.yml at the head: here the same as the base (LF-normalized), so its guard digest matches.
+    import base64
+
+    ci_text = Path(".github/workflows/ci.yml").read_bytes().decode("utf-8").replace("\r\n", "\n")
+    content = base64.b64encode(ci_text.encode("utf-8")).decode("ascii")
+    (directory / "ci-contents.json").write_text(json.dumps({"content": content}), encoding="utf-8")
 
 
 class Harness:

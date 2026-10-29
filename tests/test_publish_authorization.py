@@ -149,11 +149,11 @@ class GateConfig(unittest.TestCase):
         return found[0]
 
     def test_app_token_requires_authorization(self):
-        self.assertEqual(self.step(step_id="app")["if"], "steps.authorize.outputs.allow == 'true'")
+        self.assertIn("steps.authorize.outputs.allow == 'true'", self.step(step_id="app")["if"])
 
     def test_post_requires_authorization_and_reauthorizes(self):
         post = self.step(name="Re-authorize, re-verify guard-verify, and publish trusted-gate check (App)")
-        self.assertEqual(post["if"], "steps.authorize.outputs.allow == 'true'")
+        self.assertIn("steps.authorize.outputs.allow == 'true'", post["if"])
         run = post["run"]
         self.assertIn('trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json"', run)
         self.assertLess(run.index("trusted_gate.py authorize"), run.index("check-runs"))

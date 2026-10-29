@@ -1,10 +1,12 @@
 """guard-verify proof: PASS only for a fresh, completed, canonical success on this head.
 
 Each negative changes one fact from a known-good fixture so the failure names
-that fact. RED/GREEN: the same fixture set was checked against an absent
-verifier before guard_proof.py existed (see the commit log for the RED run).
+that fact. The candidate's own ci.yml is part of the fixture: it must carry the
+trusted base's guard digest, so a forged guard job is rejected by the proof alone.
 """
+import base64
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, "tools")
 import guard_proof as gp  # noqa: E402
+import workflow_lint as w  # noqa: E402
 
 REPO = "mao2009/oss-pce-cd-bios-security-test"
 HEAD = "a" * 40
@@ -24,7 +27,13 @@ CHECK = 123246428764
 NOW = datetime(2026, 10, 29, 4, 0, tzinfo=timezone.utc)
 RECENT = (NOW - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 OLD = (NOW - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
-REQUIRED = ["Trusted guard (main)"]
+REQUIRED = []
+BASE_CI = Path(".github/workflows/ci.yml").read_bytes().decode("utf-8").replace("\r\n", "\n")
+BASE_DIGEST = w.canonical_digest(w.parse_workflow(BASE_CI)["jobs"]["guard-verify"])
+NAMED_CI = BASE_CI.replace(
+    "  guard-verify:\n    needs: verify\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo guard\n",
+    "  guard-verify:\n    needs: verify\n    runs-on: ubuntu-24.04\n    steps:\n      - name: Trusted guard (main)\n        run: echo guard\n",
+)
 
 
 def check(**over):
@@ -69,18 +78,22 @@ def job(**over):
     return j
 
 
-def write_case(checks=None, runs=None, jobs=None):
+def write_case(checks=None, runs=None, jobs=None, ci_text=None, ci_present=True, required_runs=None):
     d = Path(tempfile.mkdtemp())
+    runs_list = runs if runs is not None else [run()]
     (d / "cr.json").write_text(json.dumps({"check_runs": checks if checks is not None else [check()]}), encoding="utf-8")
-    (d / "runs.json").write_text(json.dumps({"workflow_runs": runs if runs is not None else [run()]}), encoding="utf-8")
-    for r in (runs if runs is not None else [run()]):
-        jl = jobs if jobs is not None else [job()]
-        (d / ("jobs-%d.json" % r["id"])).write_text(json.dumps({"jobs": jl}), encoding="utf-8")
+    (d / "runs.json").write_text(json.dumps({"workflow_runs": runs_list}), encoding="utf-8")
+    for r in runs_list:
+        (d / ("jobs-%d.json" % r["id"])).write_text(json.dumps({"jobs": jobs if jobs is not None else [job()]}), encoding="utf-8")
+    if ci_present:
+        text = ci_text if ci_text is not None else BASE_CI
+        content = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        (d / "ci-contents.json").write_text(json.dumps({"content": content}), encoding="utf-8")
     return d
 
 
 def verdict(d, head=HEAD, required=REQUIRED):
-    return gp.verify_guard(d, REPO, PR, head, required, NOW)
+    return gp.verify_guard(d, REPO, PR, head, required, BASE_DIGEST, NOW)
 
 
 class Control(unittest.TestCase):
@@ -92,8 +105,8 @@ class Control(unittest.TestCase):
 
 
 class Negatives(unittest.TestCase):
-    def assertFails(self, d, needle, head=HEAD):
-        v, proof = verdict(d, head=head)
+    def assertFails(self, d, needle, head=HEAD, required=REQUIRED):
+        v, proof = verdict(d, head=head, required=required)
         self.assertIsNone(proof)
         self.assertTrue(v.startswith("FAIL"), v)
         self.assertIn(needle, v)
@@ -136,7 +149,6 @@ class Negatives(unittest.TestCase):
         self.assertFails(write_case(runs=[run(head_sha=OTHER)]), "run head does not match")
 
     def test_12_merge_commit_is_not_the_pr_head(self):
-        # The run recorded for a merge ref instead of the PR head must not count.
         self.assertFails(write_case(runs=[run(head_sha=OTHER)]), "run head does not match", head=HEAD)
 
     def test_13_wrong_event(self):
@@ -158,10 +170,12 @@ class Negatives(unittest.TestCase):
         self.assertFails(write_case(jobs=[job(conclusion="skipped")]), "guard-verify job is completed/skipped")
 
     def test_19_required_step_not_success(self):
-        self.assertFails(write_case(jobs=[job(steps=[{"name": "Trusted guard (main)", "conclusion": "skipped"}])]), "required guard step")
+        named = write_case(jobs=[job(steps=[{"name": "Trusted guard (main)", "conclusion": "skipped"}])])
+        self.assertFails(named, "required guard step", required=["Trusted guard (main)"])
 
     def test_20_required_step_absent(self):
-        self.assertFails(write_case(jobs=[job(steps=[])]), "required guard step")
+        named = write_case(jobs=[job(steps=[])])
+        self.assertFails(named, "required guard step", required=["Trusted guard (main)"])
 
     def test_21_run_reference_names_a_run_not_in_runs(self):
         self.assertFails(write_case(checks=[check(html_url="https://github.com/%s/actions/runs/1/job/%d" % (REPO, JOB))]), "not among the head's pull_request runs")
@@ -186,6 +200,24 @@ class Negatives(unittest.TestCase):
         d = write_case(checks=[check(head_sha=OTHER)], runs=[run(head_sha=OTHER)])
         self.assertFails(d, "different head")
 
+    # --- M1: the proof must reject a forged guard-verify on its own ---
+
+    def test_27_forged_guard_job_in_candidate_ci_is_rejected_without_evaluate(self):
+        # Every API fact looks good, but the candidate's guard job was replaced.
+        forged = BASE_CI.replace("  guard-verify:\n", "  guard-verify:\n    if: false\n")
+        self.assertFails(write_case(ci_text=forged), "candidate guard-verify job differs from the trusted base")
+
+    def test_28_candidate_ci_without_guard_job_is_rejected(self):
+        no_guard = BASE_CI.split("  guard-verify:")[0].rstrip() + "\n"
+        self.assertFails(write_case(ci_text=no_guard), "differs from the trusted base")
+
+    def test_29_missing_candidate_ci_contents_is_rejected(self):
+        self.assertFails(write_case(ci_present=False), "candidate ci.yml unreadable")
+
+    def test_30_listing_at_page_limit_fails_closed(self):
+        many = [check(id=CHECK + i, conclusion="failure", completed_at=RECENT) for i in range(100)]
+        self.assertFails(write_case(checks=many), "may be truncated")
+
 
 class Rerun(unittest.TestCase):
     def test_newer_success_after_older_failure_passes(self):
@@ -195,16 +227,36 @@ class Rerun(unittest.TestCase):
         self.assertEqual(v, "PASS")
 
 
+class RequiredSteps(unittest.TestCase):
+    def test_named_base_steps_are_extracted_and_enforced(self):
+        base_job = w.parse_workflow(NAMED_CI)["jobs"]["guard-verify"]
+        self.assertEqual(gp.required_steps_from_base(base_job), ["Trusted guard (main)"])
+
+    def test_named_step_success_passes_with_named_candidate(self):
+        named = write_case(ci_text=NAMED_CI)
+        # The digest of the named base job differs from BASE_DIGEST, so compute the expected digest.
+        digest = w.canonical_digest(w.parse_workflow(NAMED_CI)["jobs"]["guard-verify"])
+        v, proof = gp.verify_guard(named, REPO, PR, HEAD, ["Trusted guard (main)"], digest, NOW)
+        self.assertEqual(v, "PASS")
+
+
 class CliMapping(unittest.TestCase):
     def test_pending_exit_code_is_distinct(self):
-        import subprocess
-
         d = write_case(checks=[])
         r = subprocess.run(
             [sys.executable, "tools/guard_proof.py", str(d), REPO, str(PR), HEAD, "."],
             capture_output=True, text=True,
         )
         self.assertEqual(r.returncode, 3, r.stdout)
+
+    def test_forged_candidate_exits_nonzero(self):
+        forged = BASE_CI.replace("  guard-verify:\n", "  guard-verify:\n    if: false\n")
+        d = write_case(ci_text=forged)
+        r = subprocess.run(
+            [sys.executable, "tools/guard_proof.py", str(d), REPO, str(PR), HEAD, "."],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(r.returncode, 1, r.stdout)
 
 
 if __name__ == "__main__":
