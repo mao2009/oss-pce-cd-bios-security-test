@@ -1,3 +1,4 @@
+# live post-merge: main base (expect App success)
 name: ci
 on:
   pull_request:
