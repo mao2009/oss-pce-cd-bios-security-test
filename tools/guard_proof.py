@@ -67,7 +67,7 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
     try:
         candidate_digest = candidate_guard_digest(d)
     except (OSError, ValueError, KeyError, w.LintError) as exc:
-        return "FAIL: candidate ci.yml unreadable or invalid (" + type(exc).__name__ + ")", None
+        return "FAIL: candidate ci.yml unreadable or invalid: " + str(exc), None
     if candidate_digest is None or candidate_digest != base_guard_digest:
         return "FAIL: candidate guard-verify job differs from the trusted base", None
 
@@ -122,7 +122,12 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
         return "FAIL: job data for the run is unreadable", None
     if len(jobs) >= PAGE_LIMIT:
         return "FAIL: job listing may be truncated at the page limit", None
-    job = next((j for j in jobs if j.get("id") == job_id and j.get("name") == GUARD_JOB), None)
+    # Display names are not unique in a workflow. Two jobs named guard-verify (for example a
+    # candidate job with `name: guard-verify`) make the identity ambiguous, so it fails closed.
+    named = [j for j in jobs if j.get("name") == GUARD_JOB]
+    if len(named) != 1:
+        return "FAIL: expected exactly one guard-verify job in the run, found " + str(len(named)), None
+    job = next((j for j in named if j.get("id") == job_id), None)
     if job is None:
         return "FAIL: guard-verify job not found in the run", None
     if job.get("head_sha") != head_sha:

@@ -219,6 +219,20 @@ class Negatives(unittest.TestCase):
         self.assertFails(write_case(checks=many), "may be truncated")
 
 
+    def test_31_two_jobs_named_guard_verify_are_ambiguous(self):
+        # A candidate job with `name: guard-verify` must not let the proof pick the wrong job.
+        d = write_case(jobs=[job(), job(id=JOB + 1)])
+        self.assertFails(d, "expected exactly one guard-verify job")
+
+    def test_32_runs_listing_at_page_limit_fails_closed(self):
+        many = [run(id=RUN + i) for i in range(100)]
+        self.assertFails(write_case(runs=many, checks=[check()]), "may be truncated")
+
+    def test_33_duplicate_key_in_candidate_ci_reports_the_reason(self):
+        dup = "on: push\n" + BASE_CI
+        self.assertFails(write_case(ci_text=dup), "duplicate key")
+
+
 class Rerun(unittest.TestCase):
     def test_newer_success_after_older_failure_passes(self):
         old_failure = check(id=CHECK + 1, conclusion="failure", completed_at=(NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))
