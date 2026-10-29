@@ -37,7 +37,7 @@ jobs:
       - id: app
         uses: actions/create-github-app-token@v2
         with:
-          client-id: ${{ vars.APP_CLIENT_ID }}
+          app-id: 5519582
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: mao2009
           repositories: oss-pce-cd-bios-security-test
