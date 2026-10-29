@@ -33,10 +33,10 @@ PUBLISH_USES = re.compile(
     re.IGNORECASE,
 )
 PUBLISH_RUN = re.compile(
-    r"gh\s+release|gh\s+api[^\n]*upload|curl[^\n]*upload|npm\s+publish|twine\s+upload|docker\s+push|cargo\s+publish|git\s+push[^\n]*(tags|refs)|gem\s+push|nuget\s+push|helm\s+push|buildx[^\n]*--push",
+    r"gh\s+release|gh\s+api[^\n]*upload|curl[^\n]*upload|npm\s+publish|twine\s+upload|docker\s+push|cargo\s+publish|git\s+push[^\n]*(tags|refs)|gem\s+push|nuget\s+push|helm\s+push|buildx[^\n]*--push|semantic-release|npx[^\n]*publish",
     re.IGNORECASE,
 )
-SECRET_RUN = re.compile(r"secrets|toJSON|ACTIONS_ID_TOKEN|ACTIONS_RUNTIME_TOKEN|GITHUB_TOKEN|id-token|gh\s+auth|GH_TOKEN", re.IGNORECASE)
+SECRET_RUN = re.compile(r"secrets|toJSON|ACTIONS_|github\.token|GITHUB_TOKEN|GH_TOKEN|id-token|gh\s+auth", re.IGNORECASE)
 SHA_PIN = re.compile(r"@[0-9a-f]{40}$")
 TOP_FLAG_KEYS = ("name", "permissions", "env", "defaults", "concurrency")
 JOB_FLAG_KEYS = (

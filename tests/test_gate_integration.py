@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO = Path.cwd()
 GATE_CLI = REPO / "tools" / "trusted_gate.py"
 SHA = "a" * 40
@@ -47,8 +49,7 @@ class GateCli(unittest.TestCase):
         self.assertIn("does not match", r.stdout)
 
     def test_wrong_argument_count_exits_2(self):
-        r = run_cli(".", SHA)
-        self.assertEqual(r.returncode, 2)
+        self.assertEqual(run_cli(".", SHA).returncode, 2)
 
     def test_missing_pyyaml_does_not_pass(self):
         # Simulate a runner without PyYAML: importing yaml must fail the gate.
@@ -63,28 +64,34 @@ class GateCli(unittest.TestCase):
         self.assertNotIn("PASS", r.stdout)
 
     def test_publish_mode_is_fail_closed(self):
-        r = run_cli("publish", "success", "pass", SHA, OTHER)
-        self.assertEqual(r.stdout.strip(), "failure")
-        r = run_cli("publish", "success", "pass", SHA, SHA)
-        self.assertEqual(r.stdout.strip(), "success")
+        self.assertEqual(run_cli("publish", "success", "pass", SHA, OTHER).stdout.strip(), "failure")
+        self.assertEqual(run_cli("publish", "success", "pass", SHA, SHA).stdout.strip(), "success")
 
 
 class GateWorkflowConfig(unittest.TestCase):
     def setUp(self):
-        self.gate = (REPO / ".github" / "workflows" / "gate.yml").read_text(encoding="utf-8")
+        self.doc = yaml.safe_load((REPO / ".github" / "workflows" / "gate.yml").read_text(encoding="utf-8").replace("\r\n", "\n"))
 
-    def test_gate_calls_four_argument_cli(self):
-        self.assertIn("tools/trusted_gate.py candidate . ", self.gate)
+    def test_evaluate_runs_four_argument_cli(self):
+        runs = [s.get("run", "") for s in self.doc["jobs"]["evaluate"]["steps"]]
+        calls = [ln for r in runs for ln in r.splitlines() if "tools/trusted_gate.py" in ln]
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("tools/trusted_gate.py candidate . ", calls[0])
 
-    def test_gate_installs_pinned_pyyaml_from_base(self):
-        self.assertIn("pip install", self.gate)
-        self.assertIn("tools/requirements-lint.txt", self.gate)
+    def test_pyyaml_installed_from_pinned_requirements_in_base(self):
+        runs = [s.get("run", "") for s in self.doc["jobs"]["evaluate"]["steps"]]
+        installs = [r for r in runs if "pip install" in r]
+        self.assertEqual(len(installs), 1)
+        self.assertIn("-r tools/requirements-lint.txt", installs[0])
         req = (REPO / "tools" / "requirements-lint.txt").read_text(encoding="utf-8")
         self.assertIn("pyyaml==6.0.3", req)
 
     def test_app_identity_and_check_name_are_pinned(self):
-        self.assertIn("app-id: 5519582", self.gate)
-        self.assertIn("name=trusted-gate", self.gate)
+        step = [s for s in self.doc["jobs"]["publish"]["steps"] if s.get("id") == "app"][0]
+        self.assertEqual(step["with"]["app-id"], 5519582)
+        post_lines = [ln for s in self.doc["jobs"]["publish"]["steps"] for ln in s.get("run", "").splitlines() if "check-runs" in ln]
+        self.assertEqual(len(post_lines), 1)
+        self.assertIn("-f name=trusted-gate", "\n".join(s.get("run", "") for s in self.doc["jobs"]["publish"]["steps"]))
 
 
 if __name__ == "__main__":

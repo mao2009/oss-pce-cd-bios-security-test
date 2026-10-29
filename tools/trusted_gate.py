@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def publish_conclusion(eval_result, verdict, head_sha, current_head):

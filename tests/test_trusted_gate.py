@@ -48,7 +48,7 @@ class TrustedGateCli(unittest.TestCase):
     def test_reviewer_text_injection_fails(self):
         # Reviewer CRITICAL 2: fake guard text inside a block scalar, real guard disabled.
         fake = "name: |\n  guard-verify:\n    needs: verify\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo guard\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo verify\n  guard-verify:\n    if: ${{ false }}\n    needs: verify\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo guard\n"
-        self.assertNotEqual(g.verdict(candidate(fake), BASE_ROOT, SHA, SHA), "PASS")
+        self.assertIn("guard-verify job changed", g.verdict(candidate(fake), BASE_ROOT, SHA, SHA))
 
     def test_base_without_guard_fails_closed(self):
         broken = Path(tempfile.mkdtemp())
