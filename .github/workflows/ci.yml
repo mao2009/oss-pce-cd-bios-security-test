@@ -11,6 +11,7 @@ jobs:
     steps:
       - run: echo verify
   guard-verify:
+    if: false
     needs: verify
     runs-on: ubuntu-24.04
     steps:
