@@ -81,6 +81,12 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
         return "FAIL: listing completeness not established", None
     if not _listing_ok(cr, "check_runs") or not _listing_ok(runs, "workflow_runs"):
         return "FAIL: listing count does not match total_count", None
+    # Duplicate ids mean the listing was not a single consistent snapshot; reject it here too,
+    # so the proof does not depend on the fetch step having run first.
+    for label, items in (("check runs", cr.get("check_runs", [])), ("workflow runs", runs.get("workflow_runs", []))):
+        ids = [item.get("id") for item in items]
+        if len(set(ids)) != len(ids):
+            return "FAIL: duplicate ids in the " + label + " listing", None
     check_runs = cr.get("check_runs", [])
     workflow_runs = runs.get("workflow_runs", [])
 
@@ -154,6 +160,9 @@ def verify_guard(directory, repo, pr_number, head_sha, base_required_steps, base
         return "FAIL: job data for the run is unreadable", None
     if jobs_file_complete is not True or not _listing_ok(jobs_doc, "jobs"):
         return "FAIL: job listing completeness or count not established", None
+    job_ids = [j.get("id") for j in jobs]
+    if len(set(job_ids)) != len(job_ids):
+        return "FAIL: duplicate ids in the job listing", None
     # Display names are not unique in a workflow. Two jobs named guard-verify (for example a
     # candidate job with `name: guard-verify`) make the identity ambiguous, so it fails closed.
     named = [j for j in jobs if j.get("name") == GUARD_JOB]

@@ -3,7 +3,9 @@
 Fetch tests use a fake gh runner (no network). Proof tests reuse the guard-proof fixtures.
 The expected values below are written out literally, not read back from implementation constants.
 """
+import base64
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -206,6 +208,140 @@ class Reruns(unittest.TestCase):
     def test_completed_without_time_is_rejected(self):
         v, proof = self.verdict_for_checks([tgp.check(completed_at=None)])
         self.assertIsNone(proof)
+
+
+class ProofCounts(unittest.TestCase):
+    """M1: the proof itself rejects a listing whose item count differs from total_count."""
+
+    def proof_after_rewrite(self, filename, mutate):
+        d = tgp.write_case()
+        path = d / filename
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        mutate(doc)
+        path.write_text(json.dumps(doc), encoding="utf-8")
+        return gp.verify_guard(d, tgp.REPO, tgp.PR, tgp.HEAD, tgp.REQUIRED, tgp.BASE_DIGEST, tgp.NOW)
+
+    def test_check_listing_total_mismatch_fails_in_proof(self):
+        v, proof = self.proof_after_rewrite("cr.json", lambda d: d.update(total_count=2))
+        self.assertIsNone(proof)
+        self.assertIn("count does not match total_count", v)
+
+    def test_runs_listing_total_mismatch_fails_in_proof(self):
+        v, proof = self.proof_after_rewrite("runs.json", lambda d: d.update(total_count=5))
+        self.assertIsNone(proof)
+        self.assertIn("count does not match total_count", v)
+
+    def test_jobs_listing_total_mismatch_fails_in_proof(self):
+        v, proof = self.proof_after_rewrite("jobs-%d.json" % tgp.RUN, lambda d: d.update(total_count=3))
+        self.assertIsNone(proof)
+        self.assertIn("job listing completeness or count not established", v)
+
+
+class ProofDuplicates(unittest.TestCase):
+    """M2: duplicate ids are rejected by the proof, without relying on the fetch step."""
+
+    def test_duplicate_check_ids_rejected(self):
+        v, proof = gp.verify_guard(tgp.write_case(checks=[tgp.check(), tgp.check()]), tgp.REPO, tgp.PR, tgp.HEAD, tgp.REQUIRED, tgp.BASE_DIGEST, tgp.NOW)
+        self.assertIsNone(proof)
+        self.assertIn("duplicate ids in the check runs listing", v)
+
+    def test_duplicate_run_ids_rejected(self):
+        v, proof = gp.verify_guard(tgp.write_case(runs=[tgp.run(), tgp.run()]), tgp.REPO, tgp.PR, tgp.HEAD, tgp.REQUIRED, tgp.BASE_DIGEST, tgp.NOW)
+        self.assertIsNone(proof)
+        self.assertIn("duplicate ids in the workflow runs listing", v)
+
+    def test_duplicate_job_ids_rejected(self):
+        v, proof = gp.verify_guard(tgp.write_case(jobs=[tgp.job(), tgp.job()]), tgp.REPO, tgp.PR, tgp.HEAD, tgp.REQUIRED, tgp.BASE_DIGEST, tgp.NOW)
+        self.assertIsNone(proof)
+        self.assertIn("duplicate ids in the job listing", v)
+
+
+class FetchPipeline(unittest.TestCase):
+    """M3: the real fetch code writes the files, and the real proof reads them.
+    Only GitHub's responses are faked, in the order fetch requests them."""
+
+    def responses(self, ci_text=None, checks=None, runs=None, jobs=None):
+        checks = [tgp.check()] if checks is None else checks
+        runs = [tgp.run()] if runs is None else runs
+        jobs = [tgp.job()] if jobs is None else jobs
+        ci = tgp.BASE_CI if ci_text is None else ci_text
+        return [
+            json.dumps({"check_runs": checks, "total_count": len(checks)}),
+            json.dumps({"workflow_runs": runs, "total_count": len(runs)}),
+            json.dumps({"content": base64.b64encode(ci.encode("utf-8")).decode("ascii")}),
+            json.dumps({"jobs": jobs, "total_count": len(jobs)}),
+        ]
+
+    def through_fetch(self, responses):
+        d = Path(tempfile.mkdtemp())
+        f.fetch(FakeGh(responses), tgp.REPO, tgp.HEAD, d, sleep=no_sleep)
+        return gp.verify_guard(d, tgp.REPO, tgp.PR, tgp.HEAD, tgp.REQUIRED, tgp.BASE_DIGEST, tgp.NOW)
+
+    def test_fetched_candidate_passes(self):
+        v, proof = self.through_fetch(self.responses())
+        self.assertEqual(v, "PASS")
+
+    def test_forged_candidate_ci_fails(self):
+        forged = tgp.BASE_CI.replace("  guard-verify:\n", "  guard-verify:\n    if: false\n")
+        v, proof = self.through_fetch(self.responses(ci_text=forged))
+        self.assertIsNone(proof)
+        self.assertIn("candidate guard-verify job differs", v)
+
+    def test_missing_guard_check_is_pending(self):
+        v, proof = self.through_fetch(self.responses(checks=[]))
+        self.assertIsNone(proof)
+        self.assertTrue(v.startswith("PENDING"), v)
+
+    def test_failed_guard_check_fails(self):
+        v, proof = self.through_fetch(self.responses(checks=[tgp.check(conclusion="failure")]))
+        self.assertIsNone(proof)
+        self.assertIn("conclusion is failure", v)
+
+    def test_api_failure_during_fetch_leaves_nothing_to_verify(self):
+        # Every attempt at the first listing fails: fetch raises and writes no file for the proof.
+        d = Path(tempfile.mkdtemp())
+        with self.assertRaises(f.FetchError):
+            f.fetch(FakeGh([f.FetchError("down")] * 3), tgp.REPO, tgp.HEAD, d, sleep=no_sleep)
+        self.assertFalse((d / "cr.json").exists())
+        self.assertFalse((d / "runs.json").exists())
+
+
+class GhBackoffAndTimeout(unittest.TestCase):
+    """M4: literal expectations for the 60-second timeout, 3 attempts, and 2-then-4-second backoff."""
+
+    def run_with_fake_subprocess(self, behaviour):
+        original = f.subprocess.run
+        seen = {}
+
+        def fake_run(args, **kwargs):
+            seen.update(kwargs)
+            return behaviour(args, kwargs)
+
+        f.subprocess.run = fake_run
+        try:
+            result = f.gh_run(["repos/x/y"])
+        finally:
+            f.subprocess.run = original
+        return result, seen
+
+    def test_gh_call_has_a_sixty_second_timeout(self):
+        _, seen = self.run_with_fake_subprocess(lambda args, kw: subprocess.CompletedProcess(args, 0, stdout="{}", stderr=""))
+        self.assertEqual(seen["timeout"], 60)
+
+    def test_gh_timeout_becomes_fetch_error(self):
+        def expire(args, kw):
+            raise subprocess.TimeoutExpired(cmd="gh", timeout=60)
+
+        with self.assertRaises(f.FetchError):
+            self.run_with_fake_subprocess(expire)
+
+    def test_three_attempts_with_two_then_four_second_backoff(self):
+        sleeps = []
+        gh = FakeGh([f.FetchError("down")] * 3)
+        with self.assertRaises(f.FetchError):
+            f.gh_json(gh, "x", sleep=sleeps.append)
+        self.assertEqual(len(gh.calls), 3)
+        self.assertEqual(sleeps, [2, 4])
 
 
 if __name__ == "__main__":
