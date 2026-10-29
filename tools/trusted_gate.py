@@ -41,7 +41,9 @@ def authorize_publish(pr, expected_repo, eval_sha, event_name, event_number):
     try:
         if event_name != PUBLISH_EVENT:
             return False, "event is not " + PUBLISH_EVENT
-        if not str(event_number).isdigit() or pr["number"] != int(event_number):
+        if not expected_repo:
+            return False, "expected repository is empty"
+        if not re.fullmatch(r"[1-9][0-9]*", str(event_number)) or pr["number"] != int(event_number):
             return False, "PR number does not match the event"
         if pr["base"]["ref"] != MAIN_REF:
             return False, "base ref is not " + MAIN_REF

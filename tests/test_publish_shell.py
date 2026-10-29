@@ -168,6 +168,32 @@ class PublishShell(unittest.TestCase):
         self.assertNotEqual(r["reauth_rc"], 0)
         self.assertEqual(r["posted"], [])
 
+    def test_reread_base_changed_posts_nothing(self):
+        # Authorize passes on main; the re-read shows the base changed. The
+        # re-authorize step must fail and the POST must not happen.
+        r = self.h.scenario(pr_json(), pr_json(base_ref="gate-test/base"))
+        self.assertTrue(r["allow"])
+        self.assertNotEqual(r["reauth_rc"], 0)
+        self.assertEqual(r["posted"], [])
+
+    def test_reread_state_closed_posts_nothing(self):
+        r = self.h.scenario(pr_json(), pr_json(state="closed"))
+        self.assertTrue(r["allow"])
+        self.assertNotEqual(r["reauth_rc"], 0)
+        self.assertEqual(r["posted"], [])
+
+    def test_reread_number_changed_posts_nothing(self):
+        r = self.h.scenario(pr_json(), pr_json(number=8))
+        self.assertTrue(r["allow"])
+        self.assertNotEqual(r["reauth_rc"], 0)
+        self.assertEqual(r["posted"], [])
+
+    def test_reread_repository_changed_posts_nothing(self):
+        r = self.h.scenario(pr_json(), pr_json(repo="someone/other"))
+        self.assertTrue(r["allow"])
+        self.assertNotEqual(r["reauth_rc"], 0)
+        self.assertEqual(r["posted"], [])
+
     def test_evaluated_sha_differs_from_pr_head_posts_nothing(self):
         r = self.h.scenario(pr_json(head=SHA2), eval_sha=SHA1)
         self.assertFalse(r["allow"])

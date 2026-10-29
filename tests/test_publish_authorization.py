@@ -81,6 +81,17 @@ class Deny(unittest.TestCase):
     def test_event_number_missing_is_denied(self):
         self.assertDenied("PR number does not match", pr=GOOD, number="")
 
+    def test_event_number_with_non_ascii_digit_is_denied(self):
+        # U+0667 (ARABIC-INDIC DIGIT SEVEN) passes str.isdigit() and int(); must deny.
+        self.assertDenied("PR number does not match", pr=GOOD, number="٧")
+
+    def test_event_number_leading_zero_is_denied(self):
+        self.assertDenied("PR number does not match", pr=GOOD, number="07")
+
+    def test_empty_expected_repo_is_denied(self):
+        pr = mutated(lambda p: p["base"]["repo"].update(full_name=""))
+        self.assertDenied("expected repository is empty", pr=pr, repo="")
+
     def test_malformed_evaluated_sha_is_denied(self):
         self.assertDenied("malformed", pr=GOOD, eval_sha="C" * 40)
 
