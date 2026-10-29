@@ -51,7 +51,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-1.json"
-          if python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-1.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME"; then
+          if python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-1.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME" "$PR_NUMBER"; then
             echo "allow=true" >> "$GITHUB_OUTPUT"
           else
             echo "allow=false" >> "$GITHUB_OUTPUT"
@@ -77,7 +77,7 @@ jobs:
           VERDICT: ${{ needs.evaluate.outputs.verdict }}
         run: |
           GH_TOKEN="$READ_TOKEN" gh api "repos/$REPO/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr-2.json"
-          python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME"
+          python3 tools/trusted_gate.py authorize "$RUNNER_TEMP/pr-2.json" "$REPO" "$HEAD_SHA" "$EVENT_NAME" "$PR_NUMBER"
           CURRENT_HEAD=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['head']['sha'])" "$RUNNER_TEMP/pr-2.json")
           CONCLUSION=$(python3 tools/trusted_gate.py publish "$EVAL_RESULT" "$VERDICT" "$HEAD_SHA" "$CURRENT_HEAD")
           GH_TOKEN="$APP_TOKEN" gh api --method POST "repos/$REPO/check-runs" \

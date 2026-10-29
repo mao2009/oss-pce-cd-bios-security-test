@@ -3,7 +3,7 @@
 Usage:
   trusted_gate.py CANDIDATE_ROOT BASE_ROOT EVENT_SHA CHECKED_OUT_SHA
       Evaluate the candidate. Prints PASS or FAIL: <reason>. Exit 0 only on PASS.
-  trusted_gate.py authorize PR_JSON_FILE EXPECTED_REPO EVAL_SHA EVENT_NAME
+  trusted_gate.py authorize PR_JSON_FILE EXPECTED_REPO EVAL_SHA EVENT_NAME EVENT_NUMBER
       Decide whether the App may publish. Prints ALLOW or DENY: <reason>.
       Exit 0 only on ALLOW. Use before minting the App token and again before
       posting. Any missing or unexpected field is DENY (fail closed).
@@ -35,12 +35,14 @@ def publish_conclusion(eval_result, verdict, head_sha, current_head):
     return "success"
 
 
-def authorize_publish(pr, expected_repo, eval_sha, event_name):
+def authorize_publish(pr, expected_repo, eval_sha, event_name, event_number):
     """Return (allowed, reason). The PR JSON comes from the GitHub API, read again
     right before publishing. Missing or malformed fields deny."""
     try:
         if event_name != PUBLISH_EVENT:
             return False, "event is not " + PUBLISH_EVENT
+        if not str(event_number).isdigit() or pr["number"] != int(event_number):
+            return False, "PR number does not match the event"
         if pr["base"]["ref"] != MAIN_REF:
             return False, "base ref is not " + MAIN_REF
         if pr["base"]["repo"]["full_name"] != expected_repo:
@@ -71,9 +73,9 @@ def verdict(candidate_root, base_root, event_sha, checked_out_sha):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 6 and sys.argv[1] == "authorize":
+    if len(sys.argv) == 7 and sys.argv[1] == "authorize":
         pr = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-        allowed, reason = authorize_publish(pr, sys.argv[3], sys.argv[4], sys.argv[5])
+        allowed, reason = authorize_publish(pr, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
         print(("ALLOW" if allowed else "DENY") + ": " + reason)
         sys.exit(0 if allowed else 1)
     if len(sys.argv) == 6 and sys.argv[1] == "publish":

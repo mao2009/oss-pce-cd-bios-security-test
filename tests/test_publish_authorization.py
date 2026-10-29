@@ -24,8 +24,11 @@ GOOD = {
 }
 
 
-def authorize(pr, repo=REPO, eval_sha=SHA, event=EVENT):
-    return g.authorize_publish(pr, repo, eval_sha, event)
+NUMBER = "7"
+
+
+def authorize(pr, repo=REPO, eval_sha=SHA, event=EVENT, number=NUMBER):
+    return g.authorize_publish(pr, repo, eval_sha, event, number)
 
 
 def mutated(fn):
@@ -67,6 +70,17 @@ class Deny(unittest.TestCase):
     def test_wrong_event_is_denied(self):
         self.assertDenied("event is not", pr=GOOD, event="pull_request")
 
+    def test_pr_number_mismatch_is_denied(self):
+        # The PR JSON is for PR 8, but the event is PR 7 (same head SHA).
+        pr = mutated(lambda p: p.update(number=8))
+        self.assertDenied("PR number does not match", pr=pr)
+
+    def test_event_number_not_numeric_is_denied(self):
+        self.assertDenied("PR number does not match", pr=GOOD, number="7;rm")
+
+    def test_event_number_missing_is_denied(self):
+        self.assertDenied("PR number does not match", pr=GOOD, number="")
+
     def test_malformed_evaluated_sha_is_denied(self):
         self.assertDenied("malformed", pr=GOOD, eval_sha="C" * 40)
 
@@ -92,7 +106,7 @@ class AuthorizeCli(unittest.TestCase):
         path = Path(tempfile.mkdtemp()) / "pr.json"
         path.write_text(json.dumps(pr), encoding="utf-8")
         r = subprocess.run(
-            [sys.executable, "tools/trusted_gate.py", "authorize", str(path), REPO, SHA, EVENT],
+            [sys.executable, "tools/trusted_gate.py", "authorize", str(path), REPO, SHA, EVENT, NUMBER],
             capture_output=True, text=True,
         )
         self.assertEqual(r.returncode, 1)
@@ -106,7 +120,7 @@ class AuthorizeCli(unittest.TestCase):
         path = Path(tempfile.mkdtemp()) / "pr.json"
         path.write_text(json.dumps(GOOD), encoding="utf-8")
         r = subprocess.run(
-            [sys.executable, "tools/trusted_gate.py", "authorize", str(path), REPO, SHA, EVENT],
+            [sys.executable, "tools/trusted_gate.py", "authorize", str(path), REPO, SHA, EVENT, NUMBER],
             capture_output=True, text=True,
         )
         self.assertEqual(r.returncode, 0)
