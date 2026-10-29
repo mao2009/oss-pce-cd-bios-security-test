@@ -18,12 +18,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: candidate
           persist-credentials: false
+      - name: Install pinned lint dependencies (from base)
+        run: python3 -m pip install --disable-pip-version-check -r tools/requirements-lint.txt
       - id: eval
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           CHECKED_OUT=$(git -C candidate rev-parse HEAD)
-          if python3 tools/trusted_gate.py candidate "$HEAD_SHA" "$CHECKED_OUT"; then
+          if python3 tools/trusted_gate.py candidate . "$HEAD_SHA" "$CHECKED_OUT"; then
             echo "verdict=pass" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=fail" >> "$GITHUB_OUTPUT"

@@ -1,14 +1,18 @@
-"""Strict workflow checks for the trusted gate (A3, v3).
+"""Strict workflow checks for the trusted gate (A3, v4).
 
-The trusted baseline is derived from the BASE tree (main) at run time, never
-from the candidate tree. Every candidate workflow is compared to it with
-default-deny rules: triggers, job/step flags (if, continue-on-error, shell,
-permissions, job-level uses and secrets), third-party action references, and
-publish routes must match the base exactly. The guard-verify job is compared
-by canonical digest taken from the base tree.
+Trust model
+- The baseline is derived from the BASE tree (main) at run time by
+  baseline_from_tree(). The candidate tree is never used to build it.
+- Every security-relevant key is recorded as a flag with its exact value,
+  located by file, job, and step index. A candidate must match the base
+  exactly (default-deny): unknown flags and missing flags both fail.
+- Triggers are compared by value (digest), not only by name.
+- gate.yml is protected as a whole: any change to its parsed content fails.
+- The guard-verify job is compared by canonical digest.
 
-Known residual gap: publish routes in `run:` text are a denylist (PUBLISH_RUN).
-Only action references and flags are default-deny.
+Residual gap (M4): publish routes in `run:` text remain a denylist, and
+secret references in `run:` are recorded as flags, not interpreted. The
+primary control is the exact flag baseline plus least privilege.
 """
 import hashlib
 import json
@@ -23,17 +27,23 @@ BOOL_TAG = "tag:yaml.org,2002:bool"
 MERGE_TAG = "tag:yaml.org,2002:merge"
 GUARD_JOB = "guard-verify"
 CI_FILE = "ci.yml"
+GATE_FILE = "gate.yml"
 PUBLISH_USES = re.compile(
     r"^(actions/(upload-artifact|upload-pages-artifact|deploy-pages|attest)|softprops/|ncipollo/|peter-evans/|actions/github-script)",
     re.IGNORECASE,
 )
 PUBLISH_RUN = re.compile(
-    r"gh\s+release|gh\s+api[^\n]*upload|curl[^\n]*upload|npm\s+publish|twine\s+upload|docker\s+push|cargo\s+publish|git\s+push[^\n]*(tags|refs)",
+    r"gh\s+release|gh\s+api[^\n]*upload|curl[^\n]*upload|npm\s+publish|twine\s+upload|docker\s+push|cargo\s+publish|git\s+push[^\n]*(tags|refs)|gem\s+push|nuget\s+push|helm\s+push|buildx[^\n]*--push",
     re.IGNORECASE,
 )
+SECRET_RUN = re.compile(r"secrets\.|ACTIONS_ID_TOKEN|ACTIONS_RUNTIME_TOKEN|GITHUB_TOKEN|id-token|gh\s+auth", re.IGNORECASE)
 SHA_PIN = re.compile(r"@[0-9a-f]{40}$")
-STEP_FLAG_KEYS = ("if", "continue-on-error", "shell")
-JOB_FLAG_KEYS = ("if", "permissions", "secrets", "uses")
+TOP_FLAG_KEYS = ("permissions", "env", "defaults", "concurrency")
+JOB_FLAG_KEYS = (
+    "if", "permissions", "secrets", "uses", "continue-on-error", "environment",
+    "env", "defaults", "runs-on", "container", "services", "strategy", "outputs",
+)
+STEP_FLAG_KEYS = ("if", "continue-on-error", "shell", "env", "working-directory", "with", "uses")
 
 
 class LintError(Exception):
@@ -108,14 +118,14 @@ def _flag(name, job, step, key, value):
 
 
 def scan_workflow(name, doc):
-    """Return (publish routes, flags, action references) for one workflow."""
+    """Return (publish routes, flags) for one workflow. Raise on structural problems."""
     if not trigger_names(doc):
         raise LintError(name + ": trigger (on) missing or disabled")
     flags = set()
     publish = set()
-    uses_seen = set()
-    if "permissions" in doc:
-        flags.add(_flag(name, "-", "-", "permissions", doc["permissions"]))
+    for key in TOP_FLAG_KEYS:
+        if key in doc:
+            flags.add(_flag(name, "-", "-", key, doc[key]))
     jobs = doc.get("jobs")
     if not isinstance(jobs, dict):
         raise LintError(name + ": jobs missing")
@@ -145,12 +155,15 @@ def scan_workflow(name, doc):
                     raise LintError(name + ": local action " + uses)
                 if not SHA_PIN.search(uses):
                     raise LintError(name + ": unpinned action " + uses)
-                uses_seen.add(uses)
                 if PUBLISH_USES.match(uses):
                     publish.add(name + ":" + job_id)
-            if PUBLISH_RUN.search(str(step.get("run", ""))):
+            run = str(step.get("run", ""))
+            if PUBLISH_RUN.search(run):
                 publish.add(name + ":" + job_id)
-    return publish, flags, uses_seen
+            secret_hits = sorted(set(m.group(0).lower() for m in SECRET_RUN.finditer(run)))
+            if secret_hits:
+                flags.add(_flag(name, job_id, str(index), "run-secret-ref", secret_hits))
+    return publish, flags
 
 
 def workflow_files(root):
@@ -169,26 +182,29 @@ def baseline_from_tree(root):
     texts = workflow_files(root)
     if CI_FILE not in texts:
         raise LintError("base ci.yml missing")
-    baseline = {"files": {}, "publish": set(), "flags": set(), "actions": set()}
+    if GATE_FILE not in texts:
+        raise LintError("base gate.yml missing")
+    files = {}
+    publish = set()
+    flags = set()
+    baseline = {}
     for name, text in texts.items():
         doc = parse_workflow(text)
-        publish, flags, uses = scan_workflow(name, doc)
-        baseline["files"][name] = {"triggers": sorted(trigger_names(doc))}
-        baseline["publish"] |= publish
-        baseline["flags"] |= flags
-        baseline["actions"] |= uses
+        p, f = scan_workflow(name, doc)
+        publish |= p
+        flags |= f
+        files[name] = {"triggers": sorted(trigger_names(doc)), "trigger_digest": canonical_digest(doc.get("on"))}
         if name == CI_FILE:
             guard = doc.get("jobs", {}).get(GUARD_JOB)
             if guard is None:
                 raise LintError("base guard-verify job missing")
             baseline["guard_digest"] = canonical_digest(guard)
-    return {
-        "files": baseline["files"],
-        "publish": sorted(baseline["publish"]),
-        "flags": sorted(baseline["flags"]),
-        "actions": sorted(baseline["actions"]),
-        "guard_digest": baseline["guard_digest"],
-    }
+        if name == GATE_FILE:
+            baseline["gate_text_digest"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    baseline["files"] = files
+    baseline["publish"] = sorted(publish)
+    baseline["flags"] = sorted(flags)
+    return baseline
 
 
 def check_tree(root, baseline):
@@ -206,24 +222,21 @@ def check_tree(root, baseline):
         raise LintError("workflow added or renamed: " + ", ".join(sorted(added)))
     publish = set()
     flags = set()
-    uses = set()
     for name in sorted(texts):
         doc = parse_workflow(texts[name])
-        if trigger_names(doc) != set(expected[name]["triggers"]):
+        if trigger_names(doc) != set(expected[name]["triggers"]) or canonical_digest(doc.get("on")) != expected[name]["trigger_digest"]:
             raise LintError(name + ": triggers changed")
-        p, f, u = scan_workflow(name, doc)
+        if name == GATE_FILE and hashlib.sha256(texts[name].encode("utf-8")).hexdigest() != baseline["gate_text_digest"]:
+            raise LintError("gate.yml changed")
+        p, f = scan_workflow(name, doc)
         publish |= p
         flags |= f
-        uses |= u
         if name == CI_FILE:
             guard = doc["jobs"].get(GUARD_JOB)
             if guard is None:
                 raise LintError("guard-verify job missing")
             if canonical_digest(guard) != baseline["guard_digest"]:
                 raise LintError("guard-verify job changed")
-    unknown_uses = uses - set(baseline["actions"])
-    if unknown_uses:
-        raise LintError("unapproved action: " + ", ".join(sorted(unknown_uses)))
     unexpected_flags = flags - set(baseline["flags"])
     if unexpected_flags:
         raise LintError("unapproved flag: " + " ; ".join(sorted(unexpected_flags)))
