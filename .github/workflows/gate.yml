@@ -5,8 +5,10 @@ on:
 permissions:
   contents: read
 jobs:
-  trusted-gate:
+  evaluate:
     runs-on: ubuntu-24.04
+    outputs:
+      verdict: ${{ steps.eval.outputs.verdict }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -16,4 +18,40 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: candidate
           persist-credentials: false
-      - run: python3 tools/trusted_gate.py candidate ${{ github.event.pull_request.head.sha }}
+      - id: eval
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if python3 tools/trusted_gate.py candidate "$HEAD_SHA"; then
+            echo "verdict=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=fail" >> "$GITHUB_OUTPUT"
+          fi
+  publish:
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-24.04
+    environment: trusted-gate
+    permissions: {}
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: mao2009
+          repositories: oss-pce-cd-bios-security-test
+      - name: Publish trusted-gate check (App)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVAL_RESULT: ${{ needs.evaluate.result }}
+          VERDICT: ${{ needs.evaluate.outputs.verdict }}
+        run: |
+          if [ "$EVAL_RESULT" = "success" ] && [ "$VERDICT" = "pass" ]; then
+            CONCLUSION=success
+          else
+            CONCLUSION=failure
+          fi
+          gh api --method POST repos/${{ github.repository }}/check-runs \
+            -f name=trusted-gate -f head_sha="$HEAD_SHA" -f status=completed -f conclusion="$CONCLUSION"
