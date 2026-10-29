@@ -7,7 +7,7 @@ sys.path.insert(0, "tools")
 import workflow_lint as w  # noqa: E402
 
 BASE = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-GATE = Path(".github/workflows/gate.yml").read_text(encoding="utf-8")
+GATE = Path(".github/workflows/gate.yml").read_bytes().decode("utf-8")
 SHA = "11d5960a326750d5838078e36cf38b85af677262"
 NIGHTLY = "name: nightly\non:\n  schedule:\n    - cron: '0 3 * * *'\n  workflow_dispatch:\njobs:\n  nightly:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo nightly\n"
 BASE_FILES = {"ci.yml": BASE, "nightly.yml": NIGHTLY, "gate.yml": GATE}
@@ -22,7 +22,7 @@ def write_tree(files):
             continue
         target = root / name if name.startswith(".github/") else wf / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        target.write_bytes(text.encode("utf-8"))
     return root
 
 
@@ -229,6 +229,12 @@ class Negative(unittest.TestCase):
             w.baseline_from_tree(write_tree(files))
         self.assertIn("base guard-verify job missing", str(ctx.exception))
 
+
+    def test_58_job_name_spoof(self):
+        self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "  verify:\n", "  verify:\n    name: trusted-gate\n")))
+
+    def test_59_secret_via_tojson_in_run(self):
+        self.assertRejects("unapproved flag", self.ci(replace_once(BASE, "      - run: echo verify\n", "      - run: echo ${{ toJSON(secrets) }}\n")))
 
 class Positive(unittest.TestCase):
     def test_control_passes(self):

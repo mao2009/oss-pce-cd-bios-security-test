@@ -8,7 +8,7 @@ import trusted_gate as g  # noqa: E402
 
 BASE_ROOT = str(Path.cwd())
 CI = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-GATE = Path(".github/workflows/gate.yml").read_text(encoding="utf-8")
+GATE = Path(".github/workflows/gate.yml").read_bytes().decode("utf-8")
 SHA = "a" * 40
 OTHER = "b" * 40
 
@@ -18,8 +18,8 @@ def candidate(ci_text, gate_text=GATE):
     wf = root / ".github" / "workflows"
     wf.mkdir(parents=True)
     if ci_text is not None:
-        (wf / "ci.yml").write_text(ci_text, encoding="utf-8")
-    (wf / "gate.yml").write_text(gate_text, encoding="utf-8")
+        (wf / "ci.yml").write_bytes(ci_text.encode("utf-8"))
+    (wf / "gate.yml").write_bytes(gate_text.encode("utf-8"))
     return str(root)
 
 
@@ -53,8 +53,8 @@ class TrustedGateCli(unittest.TestCase):
     def test_base_without_guard_fails_closed(self):
         broken = Path(tempfile.mkdtemp())
         (broken / ".github" / "workflows").mkdir(parents=True)
-        (broken / ".github" / "workflows" / "ci.yml").write_text(CI.replace("  guard-verify:", "  guard-verify-x:"), encoding="utf-8")
-        (broken / ".github" / "workflows" / "gate.yml").write_text(GATE, encoding="utf-8")
+        (broken / ".github" / "workflows" / "ci.yml").write_bytes(CI.replace("  guard-verify:", "  guard-verify-x:").encode("utf-8"))
+        (broken / ".github" / "workflows" / "gate.yml").write_bytes(GATE.encode("utf-8"))
         self.assertIn("base guard-verify job missing", g.verdict(candidate(CI), str(broken), SHA, SHA))
 
 

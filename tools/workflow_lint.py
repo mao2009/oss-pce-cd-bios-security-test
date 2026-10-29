@@ -36,14 +36,14 @@ PUBLISH_RUN = re.compile(
     r"gh\s+release|gh\s+api[^\n]*upload|curl[^\n]*upload|npm\s+publish|twine\s+upload|docker\s+push|cargo\s+publish|git\s+push[^\n]*(tags|refs)|gem\s+push|nuget\s+push|helm\s+push|buildx[^\n]*--push",
     re.IGNORECASE,
 )
-SECRET_RUN = re.compile(r"secrets\.|ACTIONS_ID_TOKEN|ACTIONS_RUNTIME_TOKEN|GITHUB_TOKEN|id-token|gh\s+auth", re.IGNORECASE)
+SECRET_RUN = re.compile(r"secrets|toJSON|ACTIONS_ID_TOKEN|ACTIONS_RUNTIME_TOKEN|GITHUB_TOKEN|id-token|gh\s+auth|GH_TOKEN", re.IGNORECASE)
 SHA_PIN = re.compile(r"@[0-9a-f]{40}$")
-TOP_FLAG_KEYS = ("permissions", "env", "defaults", "concurrency")
+TOP_FLAG_KEYS = ("name", "permissions", "env", "defaults", "concurrency")
 JOB_FLAG_KEYS = (
-    "if", "permissions", "secrets", "uses", "continue-on-error", "environment",
+    "name", "if", "permissions", "secrets", "uses", "continue-on-error", "environment",
     "env", "defaults", "runs-on", "container", "services", "strategy", "outputs",
 )
-STEP_FLAG_KEYS = ("if", "continue-on-error", "shell", "env", "working-directory", "with", "uses")
+STEP_FLAG_KEYS = ("name", "id", "if", "continue-on-error", "shell", "env", "working-directory", "with", "uses")
 
 
 class LintError(Exception):
@@ -171,7 +171,7 @@ def workflow_files(root):
     if not wf.is_dir():
         return {}
     return {
-        p.name: p.read_text(encoding="utf-8")
+        p.name: p.read_bytes().decode("utf-8")
         for p in sorted(wf.iterdir())
         if p.is_file() and p.name.lower().endswith((".yml", ".yaml"))
     }
